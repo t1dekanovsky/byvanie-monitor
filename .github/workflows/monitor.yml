@@ -1,0 +1,54 @@
+name: monitor
+
+on:
+  schedule:
+    # Časy sú v UTC. 06:00 UTC = 07:00/08:00 SEČ/SELČ, 17:00 UTC = 18:00/19:00.
+    - cron: '0 6 * * *'
+    - cron: '0 17 * * *'
+  workflow_dispatch:
+
+# Potrebné, aby job mohol pushnúť aktualizovaný data/seen.json späť do repa.
+permissions:
+  contents: write
+
+# Dva behy naraz by si navzájom prepísali seen.json.
+concurrency:
+  group: monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        # persist-credentials je default true – vďaka tomu má `git push`
+        # nižšie k dispozícii vstavaný GITHUB_TOKEN.
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run monitor
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: npm run run
+
+      - name: Commit state and run report
+        # always() – report o zlyhanom behu má rovnakú cenu ako o úspešnom.
+        if: always()
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add data/seen.json reports
+          if git diff --staged --quiet; then
+            echo 'Nič nové v data/seen.json ani reports/, commit preskakujem.'
+            exit 0
+          fi
+          git commit -m 'chore: update seen listings and run report [skip ci]'
+          git push

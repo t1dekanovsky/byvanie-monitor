@@ -1,0 +1,26 @@
+{
+  "name": "byvanie-monitor",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Sleduje slovenske realitne portaly a posiela nove vyhovujuce prenajmy do Slacku.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "run": "tsx src/index.ts",
+    "test:local": "cross-env DRY_RUN=1 tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "fast-xml-parser": "^4.5.1",
+    "p-limit": "^6.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "cross-env": "^7.0.3",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}
