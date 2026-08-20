@@ -2,6 +2,8 @@ import * as cheerio from 'cheerio';
 import pLimit from 'p-limit';
 
 import { CRITERIA } from '../config.js';
+import { fetchHtmlWithRetry } from '../http.js';
+import { clean, parseArea, parseEnergies, parseEuroAmount, parseRooms } from '../parse.js';
 import type { Criteria, FetchListings, Listing } from '../types.js';
 
 export const SOURCE_NAME = 'zoznamrealit';
@@ -47,9 +49,6 @@ const LOCALITY_SLUGS: Record<string, string> = {
   'Bratislava V': 'bratislava/v',
 };
 
-const USER_AGENT =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
-
 /** Cesta skutočného inzerátu končí číselným id, napr. /krasny-3i-byt-908051. */
 const LISTING_URL_RE = /-\d{4,}$/;
 
@@ -82,83 +81,6 @@ export function localitySlug(locality: string): string {
     .replace(/^-|-$/g, '');
 }
 
-/**
- * Slovenské ceny: "850,- €", "1.100,- €", "950,- €/mes.", "1 250 €", "850,50 €".
- * Bodka aj medzera sú oddeľovač tisícov, čiarka desatinná – a ",-" znamená
- * "toľko celých eur", nie desatinnú časť.
- */
-export function parseEuroAmount(raw: string | null | undefined): number | null {
-  if (!raw) return null;
-
-  const text = raw.replace(/\u00a0/g, ' ');
-  const match = text.match(/\d[\d\s.]*(?:,(?:\d+|-))?/);
-  if (!match) return null;
-
-  const token = match[0].replace(/\s/g, '').replace(/,-$/, '');
-  const [whole = '', fraction] = token.split(',');
-  const digits = whole.replace(/\./g, '');
-  if (digits === '') return null;
-
-  const value = Number(fraction === undefined ? digits : digits + '.' + fraction);
-  return Number.isFinite(value) ? value : null;
-}
-
-/** "3-izbový byt", "5 a viac izbový byt", "4 izbový rodinný dom", "3i byt". */
-export function parseRooms(...texts: (string | null | undefined)[]): number | null {
-  for (const text of texts) {
-    if (!text) continue;
-    const rooms = text.match(/(\d+)\s*(?:a\s*viac\s*)?[-–—]?\s*izb/i);
-    if (rooms?.[1]) return Number(rooms[1]);
-  }
-
-  // Až ako záloha – inak by "3i" kdekoľvek v názve prebilo poctivý údaj o dispozícii.
-  for (const text of texts) {
-    if (!text) continue;
-    const short = text.match(/(\d+)\s*i\b/i);
-    if (short?.[1]) return Number(short[1]);
-  }
-
-  return null;
-}
-
-/** "76 m2", "100 m²", "86,5 m2". */
-export function parseArea(...texts: (string | null | undefined)[]): number | null {
-  for (const text of texts) {
-    if (!text) continue;
-    const match = text.replace(/\u00a0/g, ' ').match(/(\d+(?:[.,]\d+)?)\s*m\s*(?:2|²)/i);
-    if (match?.[1]) {
-      const value = Number(match[1].replace(',', '.'));
-      if (Number.isFinite(value)) return value;
-    }
-  }
-  return null;
-}
-
-/**
- * Energie z textu inzerátu: "650 € + 200 € energie", "energie 200 €",
- * "+ 150 EUR energie", "energie: 180,- €".
- * Vracia 0, keď inzerát tvrdí, že cena je vrátane energií.
- */
-export function parseEnergies(...texts: (string | null | undefined)[]): number | null {
-  const joined = texts.filter(Boolean).join(' ').replace(/\u00a0/g, ' ');
-
-  const patterns = [
-    /\+\s*(\d[\d\s.]*(?:,(?:\d+|-))?)\s*(?:€|eur)\s*(?:\/\s*mes\.?)?\s*(?:za\s+)?energi/i,
-    /energi\w*\s*(?:vo\s*výške|:|–|-|cca)?\s*(\d[\d\s.]*(?:,(?:\d+|-))?)\s*(?:€|eur)/i,
-    /(\d[\d\s.]*(?:,(?:\d+|-))?)\s*(?:€|eur)\s*(?:\/\s*mes\.?)?\s*(?:za\s+)?energi/i,
-  ];
-
-  for (const pattern of patterns) {
-    const match = joined.match(pattern);
-    const value = parseEuroAmount(match?.[1]);
-    if (value !== null) return value;
-  }
-
-  if (/(?:vrátane|vratane|vcetne|včetne)\s+(?:všetkých\s+)?energi/i.test(joined)) return 0;
-
-  return null;
-}
-
 /** "Bratislava - Staré Mesto / Živnostenská" -> ulica "Živnostenská". */
 export function parseStreet(locationText: string | null | undefined): string | null {
   if (!locationText) return null;
@@ -173,10 +95,6 @@ function absoluteUrl(href: string | undefined): string | null {
   } catch {
     return null;
   }
-}
-
-function clean(text: string | undefined): string {
-  return (text ?? '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 /** Vytiahne inzeráty z jednej výpisovej stránky. */
@@ -247,46 +165,6 @@ export function parseLastPage(html: string, path: string): number {
 
 /* ----------------------------------------------------------------- fetching */
 
-async function fetchHtml(url: string): Promise<string> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-
-  try {
-    const response = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        'User-Agent': USER_AGENT,
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'sk-SK,sk;q=0.9,cs;q=0.8,en;q=0.7',
-      },
-    });
-
-    if (!response.ok) throw new Error('HTTP ' + response.status + ' ' + response.statusText);
-    return await response.text();
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/** Stiahne stránku, po zlyhaní to skúsi ešte raz. Chybu púšťa ďalej volajúcemu. */
-async function fetchWithRetry(url: string): Promise<string> {
-  let lastError: unknown;
-
-  for (let attempt = 0; attempt <= RETRIES; attempt += 1) {
-    try {
-      return await fetchHtml(url);
-    } catch (error) {
-      lastError = error;
-      if (attempt < RETRIES) {
-        const reason = error instanceof Error ? error.message : String(error);
-        console.warn('[' + SOURCE_NAME + '] ' + url + ' zlyhalo (' + reason + '), skúšam znova');
-      }
-    }
-  }
-
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
-}
-
 function targetPath(typeSlug: string, locality: string): string {
   return '/prenajom/' + typeSlug + '/' + localitySlug(locality);
 }
@@ -314,7 +192,11 @@ function buildTargets(criteria: Criteria): Target[] {
  */
 async function loadTarget(target: Target): Promise<{ listings: Listing[]; lastPage: number } | null> {
   try {
-    const html = await fetchWithRetry(target.url);
+    const html = await fetchHtmlWithRetry(target.url, {
+      timeoutMs: TIMEOUT_MS,
+      retries: RETRIES,
+      label: SOURCE_NAME,
+    });
     return {
       listings: parseListingPage(html, target),
       lastPage: parseLastPage(html, new URL(target.url).pathname),

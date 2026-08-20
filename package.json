@@ -11,7 +11,8 @@
     "run": "tsx src/index.ts",
     "test:local": "cross-env DRY_RUN=1 tsx src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test:zoznamrealit": "tsx scripts/test-zoznamrealit.ts"
+    "test:zoznamrealit": "tsx scripts/test-zoznamrealit.ts",
+    "test:reality": "tsx scripts/test-reality.ts"
   },
   "dependencies": {
     "cheerio": "^1.0.0",
