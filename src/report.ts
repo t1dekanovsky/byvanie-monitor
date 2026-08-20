@@ -24,13 +24,15 @@ export interface RunSummary {
   fresh: number;
   /** Koľko naozaj odišlo do Slacku. */
   sent: number;
+  /** Koľko sa pri prvom behu označilo ako videné bez odoslania. */
+  suppressed: number;
   dryRun: boolean;
   /** Chyba, ktorá zhodila celý beh (nie jednotlivý zdroj). */
   error: string | null;
 }
 
 export function createRunSummary(dryRun: boolean): RunSummary {
-  return { sources: [], matched: 0, fresh: 0, sent: 0, dryRun, error: null };
+  return { sources: [], matched: 0, fresh: 0, sent: 0, suppressed: 0, dryRun, error: null };
 }
 
 /** reports/YYYY-MM-DD-HHmm.md, v UTC – rovnako ako cron vo workflowe. */
@@ -62,6 +64,9 @@ export function renderRunReport(summary: RunSummary, now: Date): string {
     `- odoslaných do Slacku: ${summary.sent}${summary.dryRun ? ' (dry run, neposielalo sa)' : ''}`,
   );
 
+  if (summary.suppressed > 0) {
+    lines.push(`- potlačených pri prvom behu: ${summary.suppressed} (označené ako videné, neodoslané)`);
+  }
   if (failed.length > 0) lines.push(`- zlyhaných zdrojov: ${failed.length}`);
   if (summary.error !== null) lines.push(`- beh skončil chybou: ${oneLine(summary.error)}`);
 

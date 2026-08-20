@@ -40,8 +40,19 @@ function keywordStem(keyword: string): string {
   return stem;
 }
 
+/**
+ * Koreň musí začínať na hranici slova, inak by "obsadené" našlo aj "neobsadené"
+ * a vyradilo by presne tie voľné byty, ktoré hľadáme.
+ */
 function containsKeyword(haystack: string, keyword: string): boolean {
-  return haystack.includes(keywordStem(keyword));
+  const stem = keywordStem(keyword);
+
+  for (let from = 0; ; from += 1) {
+    const at = haystack.indexOf(stem, from);
+    if (at < 0) return false;
+    if (at === 0 || !/[a-z0-9]/.test(haystack[at - 1] as string)) return true;
+    from = at;
+  }
 }
 
 /**

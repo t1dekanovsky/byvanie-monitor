@@ -177,6 +177,91 @@ export function parseLastPage(html: string): number {
   return last;
 }
 
+/**
+ * Výpisová stránka nesie v ld+json (Place + ItemList) plný popis každého inzerátu,
+ * takže detail sa vo väčšine prípadov sťahovať vôbec nemusí. Blok ale nie je platný
+ * JSON – popisy majú v sebe surové zalomenia riadkov, ktoré treba najprv escapnúť.
+ */
+function escapeControlChars(raw: string): string {
+  let out = '';
+  let inString = false;
+  let escaped = false;
+
+  for (const char of raw) {
+    if (escaped) {
+      out += char;
+      escaped = false;
+      continue;
+    }
+    if (char === '\\') {
+      out += char;
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+      out += char;
+      continue;
+    }
+
+    if (inString && char.charCodeAt(0) < 0x20) {
+      out += char === '\n' ? '\\n' : char === '\r' ? '\\r' : char === '\t' ? '\\t' : ' ';
+      continue;
+    }
+
+    out += char;
+  }
+
+  return out;
+}
+
+/** Kľúč pre porovnanie URL – ld+json ich píše s koncovou lomkou, karta nie vždy. */
+function urlKey(url: string): string {
+  return url.replace(/\/+$/, '');
+}
+
+/** Mapa `URL inzerátu -> plný popis` vytiahnutá z ld+json na výpisovej stránke. */
+export function parseLdDescriptions(html: string): Map<string, string> {
+  const $ = cheerio.load(html);
+  const found = new Map<string, string>();
+
+  $('script[type="application/ld+json"]').each((_index, element) => {
+    const raw = $(element).text();
+    if (!raw.includes('itemListElement')) return;
+
+    let data: unknown;
+    try {
+      data = JSON.parse(escapeControlChars(raw));
+    } catch {
+      return;
+    }
+
+    const items = (data as { itemListElement?: unknown }).itemListElement;
+    if (!Array.isArray(items)) return;
+
+    for (const item of items) {
+      const entity = (item as { mainEntity?: { url?: unknown; description?: unknown } }).mainEntity;
+      if (typeof entity?.url !== 'string' || typeof entity.description !== 'string') continue;
+
+      const text = clean(entity.description);
+      if (text !== '') found.set(urlKey(entity.url), text);
+    }
+  });
+
+  return found;
+}
+
+/** Nastaví popis a prepočíta energie – v plnom texte často stoja čiernym na bielom. */
+function applyDescription(listing: Listing, text: string): void {
+  listing.description = text;
+
+  const energies = parseEnergies(text, listing.title);
+  if (energies === null) return;
+
+  listing.energiesEur = energies;
+  if (listing.priceEur !== null) listing.totalPriceEur = listing.priceEur + energies;
+}
+
 /** Popis z detailu inzerátu. */
 export function parseDetailDescription(html: string): string {
   const $ = cheerio.load(html);
@@ -244,14 +329,33 @@ function buildTargets(criteria: Criteria): Target[] {
   return targets;
 }
 
-async function loadTarget(target: Target): Promise<{ listings: Listing[]; lastPage: number } | null> {
+interface TargetResult {
+  listings: Listing[];
+  lastPage: number;
+  /** URL inzerátov, ktoré už majú plný popis z ld+json a netreba im detail. */
+  full: string[];
+}
+
+async function loadTarget(target: Target): Promise<TargetResult | null> {
   try {
     const html = await fetchHtmlWithRetry(target.url, {
       timeoutMs: TIMEOUT_MS,
       retries: RETRIES,
       label: SOURCE_NAME,
     });
-    return { listings: parseListingPage(html, target), lastPage: parseLastPage(html) };
+
+    const listings = parseListingPage(html, target);
+    const descriptions = parseLdDescriptions(html);
+    const full: string[] = [];
+
+    for (const listing of listings) {
+      const text = descriptions.get(urlKey(listing.url));
+      if (text === undefined) continue;
+      applyDescription(listing, text);
+      full.push(listing.url);
+    }
+
+    return { listings, lastPage: parseLastPage(html), full };
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     console.error(
@@ -296,7 +400,10 @@ function sleep(ms: number): Promise<void> {
  * Dotiahne plné popisy k sľubným inzerátom. Beží najviac 2× za sekundu a čokoľvek
  * raz stiahnuté si pamätá v data/descriptions.json, takže druhýkrát sa to už neťahá.
  */
-async function attachDescriptions(candidates: readonly Listing[]): Promise<number> {
+async function attachDescriptions(
+  candidates: readonly Listing[],
+  alreadyFull: ReadonlySet<string>,
+): Promise<number> {
   const cache = await loadDescriptions();
   const limit = pLimit(DETAIL_CONCURRENCY);
   let nextStart = 0;
@@ -306,9 +413,12 @@ async function attachDescriptions(candidates: readonly Listing[]): Promise<numbe
   await Promise.all(
     candidates.map((listing) =>
       limit(async () => {
+        // Popis z ld+json je rovnaký ako na detaile, netreba ho ťahať druhýkrát.
+        if (alreadyFull.has(listing.url)) return;
+
         const cached = cache[listing.url];
         if (cached !== undefined) {
-          listing.description = cached.text;
+          applyDescription(listing, cached.text);
           return;
         }
 
@@ -328,7 +438,7 @@ async function attachDescriptions(candidates: readonly Listing[]): Promise<numbe
           if (text === '') return;
 
           cache[listing.url] = { text, fetchedAt: new Date().toISOString() };
-          listing.description = text;
+          applyDescription(listing, text);
           fetched += 1;
         } catch (error) {
           failed += 1;
@@ -338,15 +448,6 @@ async function attachDescriptions(candidates: readonly Listing[]): Promise<numbe
       }),
     ),
   );
-
-  // Plný popis často prezradí aj energie, ktoré na karte nie sú.
-  for (const listing of candidates) {
-    const energies = parseEnergies(listing.description);
-    if (energies !== null) {
-      listing.energiesEur = energies;
-      if (listing.priceEur !== null) listing.totalPriceEur = listing.priceEur + energies;
-    }
-  }
 
   await saveDescriptions(cache);
   if (failed > 0) console.warn('[' + SOURCE_NAME + '] ' + failed + ' detailov sa nepodarilo stiahnuť');
@@ -365,6 +466,7 @@ export async function fetchReality(criteria: Criteria = CRITERIA): Promise<Listi
 
   const collected: Listing[] = [];
   const followUp: Target[] = [];
+  const fullFromLd = new Set<string>();
   let skipped = 0;
 
   const firstResults = await Promise.all(firstPages.map((target) => limit(() => loadTarget(target))));
@@ -377,6 +479,7 @@ export async function fetchReality(criteria: Criteria = CRITERIA): Promise<Listi
     }
 
     collected.push(...result.listings);
+    for (const url of result.full) fullFromLd.add(url);
     const lastPage = Math.min(result.lastPage, MAX_PAGES_PER_TARGET);
     for (let page = 2; page <= lastPage; page += 1) {
       followUp.push({ ...target, page, url: target.url + '?page=' + page });
@@ -386,8 +489,12 @@ export async function fetchReality(criteria: Criteria = CRITERIA): Promise<Listi
   if (followUp.length > 0) {
     const extraResults = await Promise.all(followUp.map((target) => limit(() => loadTarget(target))));
     for (const result of extraResults) {
-      if (result === null) skipped += 1;
-      else collected.push(...result.listings);
+      if (result === null) {
+        skipped += 1;
+        continue;
+      }
+      collected.push(...result.listings);
+      for (const url of result.full) fullFromLd.add(url);
     }
   }
 
@@ -403,10 +510,12 @@ export async function fetchReality(criteria: Criteria = CRITERIA): Promise<Listi
     (listing) => seen[listing.id] === undefined && passesNumericChecks(listing, criteria),
   );
 
-  const fetched = await attachDescriptions(candidates);
+  const fromLd = candidates.filter((listing) => fullFromLd.has(listing.url)).length;
+  const fetched = await attachDescriptions(candidates, fullFromLd);
   console.log(
-    '[' + SOURCE_NAME + '] popisy: ' + candidates.length + ' kandidátov, ' + fetched +
-      ' stiahnutých, ' + (candidates.length - fetched) + ' z cache alebo preskočených',
+    '[' + SOURCE_NAME + '] popisy: ' + candidates.length + ' kandidátov, ' + fromLd +
+      ' z ld+json na výpise, ' + fetched + ' dotiahnutých z detailu, ' +
+      (candidates.length - fromLd - fetched) + ' z cache alebo bez popisu',
   );
 
   return listings;

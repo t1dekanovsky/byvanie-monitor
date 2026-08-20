@@ -57,5 +57,15 @@ export const CRITERIA: Criteria = {
     'krátkodobý prenájom',
     'kancelária',
     'garsónka',
+
+    // Inzerát je už neaktuálny – realitky ich nechávajú visieť s prefixom v názve.
+    'prenajaté',
+    'prenajate',
+    'rezervované',
+    'rezervovane',
+    'zálohované',
+    'zalohovane',
+    'obsadené',
+    'obsadene',
   ],
 };

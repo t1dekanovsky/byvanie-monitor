@@ -4,7 +4,15 @@ import { CRITERIA } from './config.js';
 import { filterListings } from './filter.js';
 import { createRunSummary, writeRunReport, type RunSummary, type SourceOutcome } from './report.js';
 import { sendSourceError, sendToSlack, formatContext } from './slack.js';
-import { loadSeen, markSeen, pruneOlderThan, DEFAULT_RETENTION_DAYS, type SeenMap } from './state.js';
+import {
+  loadSeen,
+  markSeen,
+  pruneOlderThan,
+  isSeen,
+  seenKeys,
+  DEFAULT_RETENTION_DAYS,
+  type SeenMap,
+} from './state.js';
 import type { Listing, Source } from './types.js';
 
 import * as zoznamrealit from './sources/zoznamrealit.js';
@@ -12,6 +20,9 @@ import * as reality from './sources/reality.js';
 
 /** Koľko zdrojov sa sťahuje naraz – portály sú malé, netreba ich zahltiť. */
 const SOURCE_CONCURRENCY = 2;
+
+/** Prvý beh pošle len toľko najlepších, zvyšok sa ticho označí ako videný. */
+const FIRST_RUN_LIMIT = 15;
 
 const SOURCES: Source[] = [
   { name: zoznamrealit.SOURCE_NAME, fetchListings: zoznamrealit.fetchListings },
@@ -54,18 +65,45 @@ async function collectFromSources(summary: RunSummary): Promise<Listing[]> {
   return batches.flat();
 }
 
-/** Zahodí duplicity v rámci behu aj všetko, čo už je v data/seen.json. */
-function dedupe(listings: readonly Listing[], seen: SeenMap): Listing[] {
-  const fresh: Listing[] = [];
-  const idsInRun = new Set<string>();
+/**
+ * Zlúči duplicity v rámci behu. Ten istý byt visí na reality.sk aj pod dvoma URL
+ * a často je aj na oboch portáloch naraz, takže sa porovnáva URL aj odtlačok
+ * obsahu. Z dvojice zostáva inzerát s dlhším popisom – v ňom sa dá lepšie hľadať
+ * podľa kľúčových slov.
+ */
+function collapseDuplicates(listings: readonly Listing[]): Listing[] {
+  const byKey = new Map<string, Listing>();
+  const kept: Listing[] = [];
 
   for (const listing of listings) {
-    if (seen[listing.id] !== undefined || idsInRun.has(listing.id)) continue;
-    idsInRun.add(listing.id);
-    fresh.push(listing);
+    const keys = seenKeys(listing);
+    const clash = keys.find((key) => byKey.has(key));
+
+    if (clash === undefined) {
+      for (const key of keys) byKey.set(key, listing);
+      kept.push(listing);
+      continue;
+    }
+
+    const previous = byKey.get(clash) as Listing;
+    if (listing.description.length <= previous.description.length) continue;
+
+    const at = kept.indexOf(previous);
+    if (at >= 0) kept[at] = listing;
+    else kept.push(listing);
+
+    for (const key of seenKeys(previous)) {
+      if (byKey.get(key) === previous) byKey.set(key, listing);
+    }
+    for (const key of keys) byKey.set(key, listing);
   }
 
-  return fresh;
+  return kept;
+}
+
+/** Nové je to, čo v seen.json nie je ani pod URL, ani pod odtlačkom obsahu. */
+function findNew(listings: readonly Listing[], seen: SeenMap): Listing[] {
+  return collapseDuplicates(listings).filter((listing) => !isSeen(listing, seen));
 }
 
 function printListings(listings: readonly Listing[]): void {
@@ -84,22 +122,41 @@ function failedSources(summary: RunSummary): SourceOutcome[] {
 
 async function run(summary: RunSummary): Promise<void> {
   const seen = await loadSeen();
+  // Prázdny seen.json = prvý beh. Vtedy by do Slacku spadol celý archív portálov.
+  const firstRun = Object.keys(seen).length === 0;
+
   const collected = await collectFromSources(summary);
   console.log('[run] spolu ' + collected.length + ' inzerátov zo ' + SOURCES.length + ' zdrojov');
 
   const matching = filterListings(collected, CRITERIA);
   summary.matched = matching.length;
 
-  const fresh = dedupe(matching, seen);
+  const fresh = findNew(matching, seen);
   summary.fresh = fresh.length;
   console.log('[run] ' + matching.length + ' vyhovujúcich, z toho ' + fresh.length + ' nových');
+
+  // fresh je zoradené podľa skóre, takže prvých 15 sú tie najlepšie.
+  let toSend = fresh;
+  let suppressed: Listing[] = [];
+  if (firstRun && fresh.length > FIRST_RUN_LIMIT) {
+    toSend = fresh.slice(0, FIRST_RUN_LIMIT);
+    suppressed = fresh.slice(FIRST_RUN_LIMIT);
+    summary.suppressed = suppressed.length;
+    console.log(
+      '[run] prvý beh: posielam ' + toSend.length + ' najlepších, zvyšných ' +
+        suppressed.length + ' len označím ako videné',
+    );
+  }
 
   const failures = failedSources(summary);
 
   if (DRY_RUN) {
     console.log('[run] DRY_RUN – do Slacku sa nič neposiela a seen.json sa nemení.');
     if (fresh.length === 0) console.log('[run] nič nové.');
-    printListings(fresh);
+    printListings(toSend);
+    if (suppressed.length > 0) {
+      console.log('\n[run] ďalších ' + suppressed.length + ' by sa označilo ako videné bez odoslania.');
+    }
     for (const failure of failures) {
       console.log('\n[run] Slack by dostal hlásenie: zdroj ' + failure.name + ' zlyhal – ' + failure.error);
     }
@@ -117,14 +174,24 @@ async function run(summary: RunSummary): Promise<void> {
     throw new Error('Chýba SLACK_WEBHOOK_URL (nastav ho ako GitHub secret alebo spusti s DRY_RUN=1).');
   }
 
-  if (fresh.length > 0) {
-    const delivered = await sendToSlack(fresh, webhookUrl);
+  if (toSend.length > 0) {
+    const delivered = await sendToSlack(toSend, webhookUrl);
     summary.sent = delivered.length;
-    console.log('[slack] odoslaných ' + delivered.length + ' z ' + fresh.length + ' inzerátov');
+    console.log('[slack] odoslaných ' + delivered.length + ' z ' + toSend.length + ' inzerátov');
 
-    // Až po odoslaní a naraz za celú dávku – čo neodišlo, ostáva na budúci beh.
-    if (delivered.length > 0) {
-      await markSeen(delivered);
+    // Zapisujeme oba kľúče – URL aj odtlačok obsahu, nech ten istý byt pod druhou
+    // URL nabudúce neprejde. Až po odoslaní a naraz; čo neodišlo, ostáva na budúce.
+    const byId = new Map(toSend.map((listing) => [listing.id, listing]));
+    const keys = [
+      ...delivered.flatMap((id) => {
+        const listing = byId.get(id);
+        return listing === undefined ? [id] : seenKeys(listing);
+      }),
+      ...suppressed.flatMap((listing) => seenKeys(listing)),
+    ];
+
+    if (keys.length > 0) {
+      await markSeen(keys);
       const pruned = await pruneOlderThan(DEFAULT_RETENTION_DAYS);
       if (pruned > 0) {
         console.log('[state] odstránených ' + pruned + ' záznamov starších ako ' + DEFAULT_RETENTION_DAYS + ' dní');
