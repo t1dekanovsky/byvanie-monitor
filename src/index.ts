@@ -3,7 +3,7 @@ import pLimit from 'p-limit';
 import { CRITERIA } from './config.js';
 import { filterListings } from './filter.js';
 import { createRunSummary, writeRunReport, type RunSummary, type SourceOutcome } from './report.js';
-import { postListings } from './slack.js';
+import { sendSourceError, sendToSlack, formatContext } from './slack.js';
 import { loadSeen, markSeen, pruneOlderThan, DEFAULT_RETENTION_DAYS, type SeenMap } from './state.js';
 import type { Listing, Source } from './types.js';
 
@@ -40,11 +40,11 @@ async function collectFromSources(summary: RunSummary): Promise<Listing[]> {
         try {
           const listings = await source.fetchListings(CRITERIA);
           outcome.found = listings.length;
-          console.log(`[${source.name}] načítaných ${listings.length} inzerátov`);
+          console.log('[' + source.name + '] načítaných ' + listings.length + ' inzerátov');
           return listings;
         } catch (error) {
           outcome.error = describeError(error);
-          console.error(`[${source.name}] zlyhal: ${outcome.error}`);
+          console.error('[' + source.name + '] zlyhal: ' + outcome.error);
           return [];
         }
       }),
@@ -60,7 +60,7 @@ function dedupe(listings: readonly Listing[], seen: SeenMap): Listing[] {
   const idsInRun = new Set<string>();
 
   for (const listing of listings) {
-    if (seen[listing.id] || idsInRun.has(listing.id)) continue;
+    if (seen[listing.id] !== undefined || idsInRun.has(listing.id)) continue;
     idsInRun.add(listing.id);
     fresh.push(listing);
   }
@@ -70,42 +70,45 @@ function dedupe(listings: readonly Listing[], seen: SeenMap): Listing[] {
 
 function printListings(listings: readonly Listing[]): void {
   for (const listing of listings) {
-    const price = listing.totalPriceEur === null ? '?' : `${listing.totalPriceEur} €`;
-    const energies = listing.estimatedEnergies ? ' (energie odhad)' : '';
     console.log(
-      [
-        `\n• ${listing.title}`,
-        `  ${price}${energies} | ${listing.rooms ?? '?'} izb. | ${listing.areaSqm ?? '?'} m² | ${listing.locality ?? '?'}`,
-        `  skóre ${listing.score} | ${listing.source}`,
-        `  ${listing.url}`,
-      ].join('\n'),
+      '\n• ' + (listing.score >= 6 ? '⭐ ' : '') + listing.title +
+        '\n  ' + formatContext(listing) +
+        '\n  ' + listing.url,
     );
   }
 }
 
-async function run(summary: RunSummary): Promise<void> {
-  const pruned = await pruneOlderThan(DEFAULT_RETENTION_DAYS);
-  if (pruned > 0) console.log(`[state] odstránených ${pruned} záznamov starších ako ${DEFAULT_RETENTION_DAYS} dní`);
+function failedSources(summary: RunSummary): SourceOutcome[] {
+  return summary.sources.filter((source) => source.error !== null);
+}
 
+async function run(summary: RunSummary): Promise<void> {
   const seen = await loadSeen();
   const collected = await collectFromSources(summary);
-  console.log(`[run] spolu ${collected.length} inzerátov zo ${SOURCES.length} zdrojov`);
+  console.log('[run] spolu ' + collected.length + ' inzerátov zo ' + SOURCES.length + ' zdrojov');
 
   const matching = filterListings(collected, CRITERIA);
   summary.matched = matching.length;
 
   const fresh = dedupe(matching, seen);
   summary.fresh = fresh.length;
-  console.log(`[run] ${matching.length} vyhovujúcich, z toho ${fresh.length} nových`);
+  console.log('[run] ' + matching.length + ' vyhovujúcich, z toho ' + fresh.length + ' nových');
 
-  if (fresh.length === 0) {
-    console.log('[run] nič nové, koniec.');
+  const failures = failedSources(summary);
+
+  if (DRY_RUN) {
+    console.log('[run] DRY_RUN – do Slacku sa nič neposiela a seen.json sa nemení.');
+    if (fresh.length === 0) console.log('[run] nič nové.');
+    printListings(fresh);
+    for (const failure of failures) {
+      console.log('\n[run] Slack by dostal hlásenie: zdroj ' + failure.name + ' zlyhal – ' + failure.error);
+    }
     return;
   }
 
-  if (DRY_RUN) {
-    console.log('[run] DRY_RUN – do Slacku sa nič neposiela a seen.json sa nemení:');
-    printListings(fresh);
+  // Prázdny beh mlčí. Hlásiť treba len rozbitý zdroj, inak by sa tváril ako "nič nové".
+  if (fresh.length === 0 && failures.length === 0) {
+    console.log('[run] nič nové, koniec.');
     return;
   }
 
@@ -114,12 +117,29 @@ async function run(summary: RunSummary): Promise<void> {
     throw new Error('Chýba SLACK_WEBHOOK_URL (nastav ho ako GitHub secret alebo spusti s DRY_RUN=1).');
   }
 
-  await postListings(fresh, webhookUrl);
-  summary.sent = fresh.length;
-  console.log(`[slack] odoslaných ${fresh.length} inzerátov`);
+  if (fresh.length > 0) {
+    const delivered = await sendToSlack(fresh, webhookUrl);
+    summary.sent = delivered.length;
+    console.log('[slack] odoslaných ' + delivered.length + ' z ' + fresh.length + ' inzerátov');
 
-  // Až po úspešnom odoslaní – inak by sa inzerát stratil, keby Slack zlyhal.
-  await markSeen(fresh.map((listing) => listing.id));
+    // Až po odoslaní a naraz za celú dávku – čo neodišlo, ostáva na budúci beh.
+    if (delivered.length > 0) {
+      await markSeen(delivered);
+      const pruned = await pruneOlderThan(DEFAULT_RETENTION_DAYS);
+      if (pruned > 0) {
+        console.log('[state] odstránených ' + pruned + ' záznamov starších ako ' + DEFAULT_RETENTION_DAYS + ' dní');
+      }
+    }
+  }
+
+  for (const failure of failures) {
+    try {
+      await sendSourceError(failure.name, failure.error as string, webhookUrl);
+      console.log('[slack] nahlásený zlyhaný zdroj ' + failure.name);
+    } catch (error) {
+      console.error('[slack] hlásenie o zdroji ' + failure.name + ' sa nepodarilo poslať: ' + describeError(error));
+    }
+  }
 }
 
 async function main(): Promise<void> {
@@ -136,13 +156,13 @@ async function main(): Promise<void> {
   // Report sa píše aj po páde, inak by o zlyhanom behu nezostala stopa.
   try {
     const reportPath = await writeRunReport(summary);
-    console.log(`[report] ${reportPath}`);
+    console.log('[report] ' + reportPath);
   } catch (error) {
-    console.error(`[report] report sa nepodarilo zapísať: ${describeError(error)}`);
+    console.error('[report] report sa nepodarilo zapísať: ' + describeError(error));
   }
 
   if (failure !== null) {
-    console.error(`[run] beh zlyhal: ${summary.error}`);
+    console.error('[run] beh zlyhal: ' + summary.error);
     process.exitCode = 1;
   }
 }
