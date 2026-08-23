@@ -147,6 +147,8 @@ export function parseListingPage(html: string, target: Pick<Target, 'locality'>)
       priceEur,
       energiesEur,
       totalPriceEur: priceEur !== null && energiesEur !== null ? priceEur + energiesEur : null,
+      // Základ ceny aj odhad energií dopočíta filter z celého textu inzerátu.
+      priceBasis: 'unknown',
       // Odhad energií dopĺňa filter; zdroj hlási len to, čo videl v inzeráte.
       estimatedEnergies: false,
       areaSqm: parseArea(areaText, title),
@@ -369,16 +371,15 @@ async function loadTarget(target: Target): Promise<TargetResult | null> {
 /**
  * Hrubé číselné sito pred sťahovaním detailov. Neznámy údaj inzerát nevyraďuje –
  * radšej stiahneme popis navyše, než by nám ušla ponuka kvôli chýbajúcemu číslu.
- * Energie sa dopĺňajú odhadom z CRITERIA, presné číslo býva až v popise.
  */
 export function passesNumericChecks(listing: Listing, criteria: Criteria): boolean {
   if (listing.rooms !== null && listing.rooms < criteria.minRooms) return false;
   if (listing.areaSqm !== null && listing.areaSqm < criteria.minAreaSqm) return false;
 
-  if (listing.priceEur !== null) {
-    const energies = listing.energiesEur ?? criteria.estimatedEnergiesEur;
-    if (listing.priceEur + energies > criteria.maxTotalPriceEur) return false;
-  }
+  // Energie sa tu zámerne nepripočítavajú. Či ich cena kryje, povie až celý popis –
+  // a práve pre popis sem inzerát ide. Odhad by tu vyhodil aj ponuky "vrátane
+  // energií", ktoré sú pod stropom.
+  if (listing.priceEur !== null && listing.priceEur > criteria.maxTotalPriceEur) return false;
 
   return true;
 }

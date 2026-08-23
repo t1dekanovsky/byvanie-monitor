@@ -135,11 +135,16 @@ async function run(summary: RunSummary): Promise<void> {
   const collected = await collectFromSources(summary);
   console.log('[run] spolu ' + collected.length + ' inzerátov zo ' + SOURCES.length + ' zdrojov');
 
-  const { kept: matching, demand, noPrice } = filterListings(collected, CRITERIA);
+  const { kept: matching, demand, noPrice, basis } = filterListings(collected, CRITERIA);
   summary.matched = matching.length;
   summary.rejectedDemand = demand;
   summary.rejectedNoPrice = noPrice;
+  summary.basis = basis;
   console.log('[filter] vyradených dopytových: ' + demand + ', bez ceny nájmu: ' + noPrice);
+  console.log(
+    '[filter] základ ceny: ' + basis.all_in + ' všetko v cene, ' + basis.rent_only +
+      ' nájom bez energií, ' + basis.unknown + ' neuvedené',
+  );
 
   const fresh = findNew(matching, seen);
   summary.fresh = fresh.length;

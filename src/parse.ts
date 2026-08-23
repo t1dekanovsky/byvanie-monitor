@@ -60,27 +60,48 @@ export function parseArea(...texts: (string | null | undefined)[]): number | nul
   return null;
 }
 
+/** Suma v slovenskom zápise, aj s koncovkou ",-". */
+const AMOUNT = String.raw`(\d[\d\s.]*(?:,(?:\d+|-))?)`;
+
+/** Ako sa v inzerátoch volá to, čo sa k nájmu pripočítava. Bez diakritiky. */
+const ENERGY_LABEL = String.raw`(?:energi|zaloh|poplatk|sluzb)\w*`;
+
 /**
- * Energie z textu inzerátu: "650 € + 200 € energie", "energie 200 €",
- * "+ 150 EUR za energie", "energie: 180,- €".
- * Vracia 0, keď inzerát tvrdí, že cena je vrátane energií.
+ * Mesačné energie mimo tohto rozsahu sú takmer isto niečo iné – kaucia, ročné
+ * vyúčtovanie alebo samotný nájom, ktorý sa do vzorky pripletie.
+ */
+const MIN_ENERGIES_EUR = 30;
+const MAX_ENERGIES_EUR = 600;
+
+/**
+ * Suma energií z textu inzerátu: "650 € + 200 € energie", "energie 200 €",
+ * "+ 150 EUR za energie", "energie: 180,- €", "zálohy 250 €/mes", "poplatky 180 EUR".
+ * Vracia null, keď inzerát sumu neuvádza alebo je zjavne o niečom inom. Či je cena
+ * vrátane energií, hovorí `priceBasis`, nie táto funkcia.
  */
 export function parseEnergies(...texts: (string | null | undefined)[]): number | null {
-  const joined = texts.filter(Boolean).join(' ').replace(/\u00a0/g, ' ');
+  // Bez diakritiky, lebo inzeráty píšu "vo výške" aj "vo vyske".
+  const joined = texts
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\u00a0/g, ' ')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
 
   const patterns = [
-    /\+\s*(\d[\d\s.]*(?:,(?:\d+|-))?)\s*(?:€|eur)\s*(?:\/\s*mes\.?)?\s*(?:za\s+)?energi/i,
-    /energi\w*\s*(?:vo\s*výške|:|–|-|cca)?\s*(\d[\d\s.]*(?:,(?:\d+|-))?)\s*(?:€|eur)/i,
-    /(\d[\d\s.]*(?:,(?:\d+|-))?)\s*(?:€|eur)\s*(?:\/\s*mes\.?)?\s*(?:za\s+)?energi/i,
+    new RegExp(String.raw`\+\s*${AMOUNT}\s*(?:€|eur)\s*(?:/\s*mes\.?)?\s*(?:za\s+)?${ENERGY_LABEL}`),
+    new RegExp(
+      String.raw`${ENERGY_LABEL}(?:\s+(?:na|za)\s+\w+)?\s*(?:vo\s*vyske|zalohovo|:|–|-|cca|od)?\s*${AMOUNT}\s*(?:€|eur)`,
+    ),
+    new RegExp(String.raw`${AMOUNT}\s*(?:€|eur)\s*(?:/\s*mes\.?)?\s*(?:za\s+)?${ENERGY_LABEL}`),
   ];
 
   for (const pattern of patterns) {
-    const match = joined.match(pattern);
-    const value = parseEuroAmount(match?.[1]);
-    if (value !== null) return value;
+    const value = parseEuroAmount(joined.match(pattern)?.[1]);
+    if (value === null) continue;
+    return value >= MIN_ENERGIES_EUR && value <= MAX_ENERGIES_EUR ? value : null;
   }
-
-  if (/(?:vrátane|vratane|vcetne|včetne)\s+(?:všetkých\s+)?energi/i.test(joined)) return 0;
 
   return null;
 }

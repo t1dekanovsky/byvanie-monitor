@@ -131,6 +131,8 @@ export function parseListingPage(html: string, target: Pick<Target, 'locality'>)
       priceEur,
       energiesEur,
       totalPriceEur: priceEur !== null && energiesEur !== null ? priceEur + energiesEur : null,
+      // Základ ceny aj odhad energií dopočíta filter z celého textu inzerátu.
+      priceBasis: 'unknown',
       // Odhad energií dopĺňa filter; zdroj hlási len to, čo naozaj videl v inzeráte.
       estimatedEnergies: false,
       areaSqm: parseArea(areaText, title, description),

@@ -1,3 +1,10 @@
+/**
+ * Čo už je v uvedenej cene. `all_in` = energie a poplatky sú v nej zahrnuté,
+ * `rent_only` = platia sa navyše, `unknown` = inzerát to nehovorí. Neznámy základ
+ * rátame ako `rent_only` – radšej prísť o inzerát než dostať taký, čo je nad strop.
+ */
+export type PriceBasis = 'all_in' | 'rent_only' | 'unknown';
+
 /** Jeden inzerát prenájmu, normalizovaný do spoločného tvaru naprieč zdrojmi. */
 export interface Listing {
   /** Stabilný identifikátor, napr. "zoznamrealit:123456". */
@@ -12,6 +19,8 @@ export interface Listing {
   energiesEur: number | null;
   /** priceEur + energiesEur (alebo odhad) – číslo porovnávané s maxTotalPriceEur. */
   totalPriceEur: number | null;
+  /** Či uvedená cena už kryje energie. Dopočíta filter z názvu a popisu. */
+  priceBasis: PriceBasis;
   /** True ak energie v inzeráte neboli a použil sa CRITERIA.estimatedEnergiesEur. */
   estimatedEnergies: boolean;
   areaSqm: number | null;
@@ -32,13 +41,20 @@ export interface Criteria {
   minRooms: number;
   maxTotalPriceEur: number;
   minAreaSqm: number;
-  /** Použije sa, keď inzerát uvádza iba nájom bez energií. */
-  estimatedEnergiesEur: number;
+  /** Odhad energií na m² za mesiac, keď inzerát sumu neuvádza. */
+  energiesPerSqmEur: number;
+  /** Spodná a horná hranica toho odhadu. */
+  minEstimatedEnergiesEur: number;
+  maxEstimatedEnergiesEur: number;
   localities: readonly string[];
   positiveKeywords: readonly string[];
   negativeKeywords: readonly string[];
   /** Frázy, ktorými sa prezradí dopytový inzerát – realitka byt hľadá, neponúka. */
   demandKeywords: readonly string[];
+  /** Frázy, po ktorých je uvedená cena už vrátane energií. */
+  allInKeywords: readonly string[];
+  /** Frázy, po ktorých sa energie platia navyše. Pri spore vyhrávajú nad allInKeywords. */
+  rentOnlyKeywords: readonly string[];
 }
 
 /** Podpis, ktorý musí spĺňať každý modul v `src/sources/`. */

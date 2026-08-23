@@ -14,8 +14,14 @@ export const CRITERIA: Criteria = {
   /** Minimálna úžitková plocha v m². */
   minAreaSqm: 60,
 
-  /** Odhad energií, keď inzerát uvádza iba nájom "bez energií". */
-  estimatedEnergiesEur: 150,
+  /**
+   * Odhad energií, keď inzerát sumu neuvádza: plocha × sadzba, orezané do rozsahu.
+   * Malá garsónka a 200 m² vila nestoja na energiách rovnako, plochý odhad 150 €
+   * púšťal veľké byty hlboko pod ich skutočnú cenu.
+   */
+  energiesPerSqmEur: 2.5,
+  minEstimatedEnergiesEur: 150,
+  maxEstimatedEnergiesEur: 350,
 
   /** Celý Bratislavský kraj. */
   localities: [
@@ -27,6 +33,41 @@ export const CRITERIA: Criteria = {
     'Malacky',
     'Pezinok',
     'Senec',
+  ],
+
+  /**
+   * Uvedená cena už kryje energie. Porovnáva sa bez diakritiky a po koreňoch,
+   * takže "vrátane energií" sedí aj na "vrátane energie".
+   */
+  allInKeywords: [
+    'vrátane energií',
+    's energiami',
+    'energie v cene',
+    'všetko v cene',
+    'vrátane všetkých poplatkov',
+    'vrátane poplatkov',
+    'cena je konečná',
+    'all inclusive',
+    'vrátane služieb',
+  ],
+
+  /**
+   * Energie sa platia navyše. Pri spore s allInKeywords vyhrávajú tieto – inzerát
+   * často uvedie obe ceny ("850 € + energie, alebo 1 050 € vrátane energií") a
+   * v hlavičke visí tá nižšia, teda nájom bez energií.
+   */
+  rentOnlyKeywords: [
+    '+ energie',
+    'plus energie',
+    'bez energií',
+    'energie zvlášť',
+    'energie osobitne',
+    '+ zálohy',
+    '+ poplatky',
+    '+ služby',
+    'k tomu energie',
+    'energie podľa spotreby',
+    'energie sa platia zvlášť',
   ],
 
   /** Zvyšujú skóre inzerátu. */

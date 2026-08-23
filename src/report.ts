@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { formatPrice } from './slack.js';
-import type { Listing } from './types.js';
+import type { Listing, PriceBasis } from './types.js';
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const REPORTS_DIR = path.join(ROOT_DIR, 'reports');
@@ -30,6 +30,8 @@ export interface RunSummary {
   rejectedDemand: number;
   /** Koľko inzerátov vyhodilo pravidlo o chýbajúcom nájme. */
   rejectedNoPrice: number;
+  /** Rozdelenie základu ceny medzi inzerátmi, ktoré sa dostali k počítaniu. */
+  basis: Record<PriceBasis, number>;
   /** Koľko z nich sme ešte nevideli. */
   fresh: number;
   /** Inzeráty, ktoré naozaj odišli do Slacku. */
@@ -53,6 +55,7 @@ export function createRunSummary(dryRun: boolean, backfill = false): RunSummary 
     matched: 0,
     rejectedDemand: 0,
     rejectedNoPrice: 0,
+    basis: { all_in: 0, rent_only: 0, unknown: 0 },
     fresh: 0,
     sent: [],
     suppressed: [],
@@ -149,6 +152,7 @@ export function renderRunReport(summary: RunSummary, now: Date): string {
     // Obe pravidlá sa vypisujú vždy, aj s nulou – nech je vidieť, že bežia.
     `- vyradených ako dopyt: ${summary.rejectedDemand}`,
     `- vyradených bez ceny nájmu: ${summary.rejectedNoPrice}`,
+    `- základ ceny: ${summary.basis.all_in} všetko v cene · ${summary.basis.rent_only} nájom bez energií · ${summary.basis.unknown} neuvedené`,
     `- nových: ${summary.fresh}`,
     `- odoslaných do Slacku: ${summary.sent.length}${summary.dryRun ? ' (dry run, neposielalo sa)' : ''}`,
   );

@@ -1,5 +1,6 @@
 import { CRITERIA } from './config.js';
-import type { Criteria, Listing } from './types.js';
+import { parseEnergies } from './parse.js';
+import type { Criteria, Listing, PriceBasis } from './types.js';
 
 /**
  * Tieto slová vážia dvojnásobne – práve kvôli nim inzerát otvoríme ako prvý.
@@ -128,25 +129,117 @@ export function demandPhrase(listing: Listing, criteria: Criteria = CRITERIA): s
   return criteria.demandKeywords.find((phrase) => containsPhrase(words, phrase)) ?? null;
 }
 
+/* ------------------------------------------------------------- základ ceny */
+
 /**
- * Doplní chýbajúce energie odhadom a dopočíta totalPriceEur.
- * Nastaví `estimatedEnergies: true`, keď sa odhad naozaj použil.
+ * Fráza sa hľadá bez diakritiky a po koreňoch, aby sedela aj na skloňované tvary.
+ * Slovo kratšie než koreň (predložka "s", "v") musí sedieť presne – inak by "s"
+ * chytalo hocijaké slovo na "s" a "s energiami" by našlo aj "služby energií".
+ */
+/** Suma s menou a prípadným "/mes.", ktorá smie stáť hneď za plusom. */
+const AFTER_PLUS = String.raw`\s*(?:\d[\d\s.]*(?:,(?:\d+|-))?\s*(?:€|eur)\s*(?:/\s*mes(?:\.|iac)?)?\s*)?`;
+
+function priceBasisPattern(phrase: string): RegExp {
+  const words = normalize(phrase).split(' ');
+  let source = '';
+
+  words.forEach((word, index) => {
+    if (index > 0 && !source.endsWith(')?')) source += String.raw`\s+`;
+
+    // Za plusom stojí často ešte suma: "+ 200 € energie", "+110 eur/mes energie",
+    // "cena 900 plus 300,-€/mesiac energie". Je to tá istá veta, len vypísaná.
+    if (word === '+' || word === 'plus') {
+      source += (word === '+' ? String.raw`\+` : 'plus') + AFTER_PLUS;
+      return;
+    }
+
+    source += word.length < MIN_STEM_LENGTH ? word : keywordStem(word) + '[a-z]*';
+  });
+
+  // Hranicu slova pýtame len pred písmenom. Plus býva prilepený na predchádzajúce
+  // slovo ("1.190 eur/mes+110 eur/mes energie") a hranica by ho minula.
+  const boundary = words[0] === '+' ? '' : String.raw`(?<![a-z])`;
+  return new RegExp(boundary + source, 'i');
+}
+
+/** Skompilované vzory si držíme – regex sa inak stavia pre každý inzerát nanovo. */
+const PATTERN_CACHE = new Map<string, RegExp>();
+
+function matchesAny(haystack: string, phrases: readonly string[]): boolean {
+  for (const phrase of phrases) {
+    let pattern = PATTERN_CACHE.get(phrase);
+    if (pattern === undefined) {
+      pattern = priceBasisPattern(phrase);
+      PATTERN_CACHE.set(phrase, pattern);
+    }
+    if (pattern.test(haystack)) return true;
+  }
+  return false;
+}
+
+/**
+ * Čo už uvedená cena kryje. Keď si inzerát protirečí – a stáva sa to, býva v ňom
+ * cena bez energií aj s nimi – platí `rent_only`: v hlavičke visí tá nižšia.
+ */
+export function detectPriceBasis(listing: Listing, criteria: Criteria = CRITERIA): PriceBasis {
+  const haystack = normalize(listing.title + ' ' + listing.description);
+
+  if (matchesAny(haystack, criteria.rentOnlyKeywords)) return 'rent_only';
+  if (matchesAny(haystack, criteria.allInKeywords)) return 'all_in';
+  return 'unknown';
+}
+
+/**
+ * Odhad energií podľa plochy, orezaný do rozsahu z CRITERIA. Keď plochu nepoznáme,
+ * berieme spodnú hranicu – vyššie číslo by inzerát vyradilo na základe výmyslu.
+ */
+export function estimateEnergies(listing: Listing, criteria: Criteria = CRITERIA): number {
+  const raw =
+    listing.areaSqm === null
+      ? criteria.minEstimatedEnergiesEur
+      : Math.round(listing.areaSqm * criteria.energiesPerSqmEur);
+
+  return Math.min(Math.max(raw, criteria.minEstimatedEnergiesEur), criteria.maxEstimatedEnergiesEur);
+}
+
+/**
+ * Určí základ ceny, doplní energie a dopočíta totalPriceEur tak, aby vždy platilo
+ * totalPriceEur = priceEur + energiesEur. `estimatedEnergies` je true len vtedy,
+ * keď sa energie naozaj odhadovali.
  */
 export function withTotalPrice(listing: Listing, criteria: Criteria = CRITERIA): Listing {
   // Odhadnúť sa smú len energie, nájom nikdy. Nula znamená to isté čo chýbajúci
   // údaj – inzerát bez nájmu nemá k čomu energie pripočítať.
   if (listing.priceEur === null || listing.priceEur === 0) {
-    return { ...listing, totalPriceEur: null };
+    return { ...listing, priceBasis: detectPriceBasis(listing, criteria), totalPriceEur: null };
   }
 
-  const energiesKnown = listing.energiesEur !== null;
-  const energies = energiesKnown ? (listing.energiesEur as number) : criteria.estimatedEnergiesEur;
+  const priceBasis = detectPriceBasis(listing, criteria);
+
+  // Cena už kryje energie, takže sa k nej nič nepripočítava.
+  if (priceBasis === 'all_in') {
+    return {
+      ...listing,
+      priceBasis,
+      energiesEur: 0,
+      totalPriceEur: listing.priceEur,
+      estimatedEnergies: false,
+    };
+  }
+
+  // Neznámy základ berieme ako nájom bez energií – radšej prísť o inzerát než
+  // dostať taký, ktorý je po pripočítaní energií nad stropom.
+  // Nula znamená "nič sa nenašlo", nie "energie sú zadarmo", tak sa dohľadáva ďalej.
+  const known = listing.energiesEur === null || listing.energiesEur === 0 ? null : listing.energiesEur;
+  const stated = known ?? parseEnergies(listing.description, listing.title);
+  const energies = stated ?? estimateEnergies(listing, criteria);
 
   return {
     ...listing,
+    priceBasis,
     energiesEur: energies,
     totalPriceEur: listing.priceEur + energies,
-    estimatedEnergies: !energiesKnown,
+    estimatedEnergies: stated === null,
   };
 }
 
@@ -226,6 +319,8 @@ export interface FilterResult {
   demand: number;
   /** Koľko inzerátov vyhodilo pravidlo o chýbajúcom nájme. */
   noPrice: number;
+  /** Ako sa rozdelil základ ceny medzi inzerátmi, ktoré sa vôbec dostali k počítaniu. */
+  basis: Record<PriceBasis, number>;
 }
 
 /**
@@ -237,6 +332,7 @@ export interface FilterResult {
  */
 export function filterListings(listings: readonly Listing[], criteria: Criteria = CRITERIA): FilterResult {
   const kept: Listing[] = [];
+  const basis: Record<PriceBasis, number> = { all_in: 0, rent_only: 0, unknown: 0 };
   let demand = 0;
   let noPrice = 0;
 
@@ -247,9 +343,12 @@ export function filterListings(listings: readonly Listing[], criteria: Criteria 
     if (bad !== null) {
       if (bad.rule === 'demand') demand += 1;
       else if (bad.rule === 'noPrice') noPrice += 1;
+      // Základ ceny rátame len tam, kde sa naozaj počítalo s číslami.
+      else basis[priced.priceBasis] += 1;
       continue;
     }
 
+    basis[priced.priceBasis] += 1;
     kept.push({ ...priced, score: scoreListing(priced, criteria) });
   }
 
@@ -258,5 +357,5 @@ export function filterListings(listings: readonly Listing[], criteria: Criteria 
     return (a.totalPriceEur ?? Infinity) - (b.totalPriceEur ?? Infinity);
   });
 
-  return { kept, demand, noPrice };
+  return { kept, demand, noPrice, basis };
 }

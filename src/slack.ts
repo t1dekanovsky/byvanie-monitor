@@ -29,11 +29,18 @@ function shorten(text: string, maxLength: number): string {
   return trimmed.length > maxLength ? trimmed.slice(0, maxLength - 1).trimEnd() + '…' : trimmed;
 }
 
-/** "1 050 € (energie odhad)" alebo "cena neuvedená". */
+/**
+ * "1 080 € všetko v cene", "850 € + 200 € energie", "950 € + odhad 175 € energie".
+ * Zo samotného čísla nie je poznať, čo kryje, tak to hovoríme priamo.
+ */
 export function formatPrice(listing: Listing): string {
-  if (listing.totalPriceEur === null) return 'cena neuvedená';
-  const price = formatEur(listing.totalPriceEur);
-  return listing.estimatedEnergies ? price + ' (energie odhad)' : price;
+  if (listing.totalPriceEur === null || listing.priceEur === null) return 'cena neuvedená';
+
+  const rent = formatEur(listing.priceEur);
+  if (listing.priceBasis === 'all_in') return rent + ' všetko v cene';
+
+  const energies = formatEur(listing.energiesEur ?? 0);
+  return rent + (listing.estimatedEnergies ? ' + odhad ' : ' + ') + energies + ' energie';
 }
 
 /** 1 izba, 2–4 izby, 5 a viac izieb. */
