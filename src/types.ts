@@ -37,6 +37,8 @@ export interface Criteria {
   localities: readonly string[];
   positiveKeywords: readonly string[];
   negativeKeywords: readonly string[];
+  /** Frázy, ktorými sa prezradí dopytový inzerát – realitka byt hľadá, neponúka. */
+  demandKeywords: readonly string[];
 }
 
 /** Podpis, ktorý musí spĺňať každý modul v `src/sources/`. */

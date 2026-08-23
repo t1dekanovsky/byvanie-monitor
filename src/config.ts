@@ -47,6 +47,27 @@ export const CRITERIA: Criteria = {
     'bez provízie',
   ],
 
+  /**
+   * Dopytové inzeráty: realitka byt hľadá pre klienta, neponúka ho. Porovnáva sa
+   * bez diakritiky a po koreňoch, takže "hľadám byt" sedí aj na "hľadáme 3-izbový byt".
+   * Jednoslovné frázy musia sedieť celým slovom – "dopytu po nájomnom bývaní" je
+   * bežná veta v ponuke, nie dopyt.
+   */
+  demandKeywords: [
+    'hľadám byt',
+    'hľadáme byt',
+    'hľadám dom',
+    'hľadáme dom',
+    'hľadám pre klienta',
+    'hľadáme pre klienta',
+    'pre klienta hľadám',
+    'pre nášho klienta',
+    'dopyt',
+    'hľadá sa',
+    'sháním',
+    'poptávka',
+  ],
+
   /** Vyraďujú inzerát, aj keď čísla sedia. */
   negativeKeywords: [
     'pôvodný stav',

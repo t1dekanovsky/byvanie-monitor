@@ -135,8 +135,11 @@ async function run(summary: RunSummary): Promise<void> {
   const collected = await collectFromSources(summary);
   console.log('[run] spolu ' + collected.length + ' inzerátov zo ' + SOURCES.length + ' zdrojov');
 
-  const matching = filterListings(collected, CRITERIA);
+  const { kept: matching, demand, noPrice } = filterListings(collected, CRITERIA);
   summary.matched = matching.length;
+  summary.rejectedDemand = demand;
+  summary.rejectedNoPrice = noPrice;
+  console.log('[filter] vyradených dopytových: ' + demand + ', bez ceny nájmu: ' + noPrice);
 
   const fresh = findNew(matching, seen);
   summary.fresh = fresh.length;

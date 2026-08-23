@@ -26,6 +26,10 @@ export interface RunSummary {
   sources: SourceOutcome[];
   /** Koľko prešlo filtrom. */
   matched: number;
+  /** Koľko inzerátov vyhodilo pravidlo o dopytových inzerátoch. */
+  rejectedDemand: number;
+  /** Koľko inzerátov vyhodilo pravidlo o chýbajúcom nájme. */
+  rejectedNoPrice: number;
   /** Koľko z nich sme ešte nevideli. */
   fresh: number;
   /** Inzeráty, ktoré naozaj odišli do Slacku. */
@@ -44,7 +48,18 @@ export interface RunSummary {
 }
 
 export function createRunSummary(dryRun: boolean, backfill = false): RunSummary {
-  return { sources: [], matched: 0, fresh: 0, sent: [], suppressed: [], dryRun, backfill, error: null };
+  return {
+    sources: [],
+    matched: 0,
+    rejectedDemand: 0,
+    rejectedNoPrice: 0,
+    fresh: 0,
+    sent: [],
+    suppressed: [],
+    dryRun,
+    backfill,
+    error: null,
+  };
 }
 
 /** Riadok zoznamu: skóre, cena spolu, plocha, lokalita a odkaz. */
@@ -131,6 +146,9 @@ export function renderRunReport(summary: RunSummary, now: Date): string {
   lines.push(
     '',
     `- prešlo filtrom: ${summary.matched}`,
+    // Obe pravidlá sa vypisujú vždy, aj s nulou – nech je vidieť, že bežia.
+    `- vyradených ako dopyt: ${summary.rejectedDemand}`,
+    `- vyradených bez ceny nájmu: ${summary.rejectedNoPrice}`,
     `- nových: ${summary.fresh}`,
     `- odoslaných do Slacku: ${summary.sent.length}${summary.dryRun ? ' (dry run, neposielalo sa)' : ''}`,
   );
