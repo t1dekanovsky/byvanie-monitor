@@ -150,7 +150,7 @@ async function run(summary: RunSummary): Promise<void> {
   } else if (firstRun && fresh.length > FIRST_RUN_LIMIT) {
     toSend = fresh.slice(0, FIRST_RUN_LIMIT);
     suppressed = fresh.slice(FIRST_RUN_LIMIT);
-    summary.suppressed = suppressed.length;
+    summary.suppressed = suppressed;
     console.log(
       '[run] prvý beh: posielam ' + toSend.length + ' najlepších, zvyšných ' +
         suppressed.length + ' len označím ako videné',
@@ -184,13 +184,18 @@ async function run(summary: RunSummary): Promise<void> {
   }
 
   if (toSend.length > 0) {
+    const byId = new Map(toSend.map((listing) => [listing.id, listing]));
     const delivered = await sendToSlack(toSend, webhookUrl);
-    summary.sent = delivered.length;
+    // Do reportu ide celý inzerát, nie len počet – nech sa dá spätne dohľadať,
+    // čo presne odišlo, bez hrabania sa v histórii Slacku.
+    summary.sent = delivered.flatMap((id) => {
+      const listing = byId.get(id);
+      return listing === undefined ? [] : [listing];
+    });
     console.log('[slack] odoslaných ' + delivered.length + ' z ' + toSend.length + ' inzerátov');
 
     // Zapisujeme oba kľúče – URL aj odtlačok obsahu, nech ten istý byt pod druhou
     // URL nabudúce neprejde. Až po odoslaní a naraz; čo neodišlo, ostáva na budúce.
-    const byId = new Map(toSend.map((listing) => [listing.id, listing]));
     const keys = [
       ...delivered.flatMap((id) => {
         const listing = byId.get(id);

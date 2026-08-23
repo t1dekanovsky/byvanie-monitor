@@ -13,8 +13,11 @@ src/sources/*  ->  src/filter.ts  ->  dedup (data/seen.json)  ->  src/slack.ts
 nezhodí celý beh), výsledok prefiltruje, zahodí už videné inzeráty a zvyšok pošle
 do Slacku. Odoslané id sa zapíšu do `data/seen.json`, ktorý workflow commitne späť
 do repa – to je celá "databáza". Každý beh navyše zapíše `reports/YYYY-MM-DD-HHmm.md`
-(UTC) s počtami za jednotlivé zdroje a zoznamom tých, ktoré zlyhali; workflow ho
-commitne spolu so seen.json.
+(UTC) s počtami za jednotlivé zdroje, zoznamom tých, ktoré zlyhali, a sekciami
+**Odoslané** a **Potlačené** – tam je pri každom inzeráte skóre, cena, plocha,
+lokalita a odkaz, takže sa nič nemusí dohľadávať v histórii Slacku. Report má strop
+119 riadkov; keď sa zoznamy nezmestia, nechá tie s najvyšším skóre a dopíše, koľko
+vynechal. Workflow ho commitne spolu so seen.json.
 
 ## Stav
 
