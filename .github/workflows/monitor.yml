@@ -6,6 +6,11 @@ on:
     - cron: '0 6 * * *'
     - cron: '0 17 * * *'
   workflow_dispatch:
+    inputs:
+      backfill:
+        description: 'Poslať všetky nové inzeráty naraz (bez stropu prvého behu)'
+        type: boolean
+        default: false
 
 # Potrebné, aby job mohol pushnúť aktualizovaný data/seen.json späť do repa.
 permissions:
@@ -37,6 +42,8 @@ jobs:
       - name: Run monitor
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          # Pri cron behu je inputs.backfill prázdny, takže vždy vyjde '0'.
+          BACKFILL: ${{ inputs.backfill && '1' || '0' }}
         run: npm run run
 
       - name: Commit state and run report

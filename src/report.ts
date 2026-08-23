@@ -27,12 +27,14 @@ export interface RunSummary {
   /** Koľko sa pri prvom behu označilo ako videné bez odoslania. */
   suppressed: number;
   dryRun: boolean;
+  /** Jednorazový beh s BACKFILL=1 – strop prvého behu sa nepoužil. */
+  backfill: boolean;
   /** Chyba, ktorá zhodila celý beh (nie jednotlivý zdroj). */
   error: string | null;
 }
 
-export function createRunSummary(dryRun: boolean): RunSummary {
-  return { sources: [], matched: 0, fresh: 0, sent: 0, suppressed: 0, dryRun, error: null };
+export function createRunSummary(dryRun: boolean, backfill = false): RunSummary {
+  return { sources: [], matched: 0, fresh: 0, sent: 0, suppressed: 0, dryRun, backfill, error: null };
 }
 
 /** reports/YYYY-MM-DD-HHmm.md, v UTC – rovnako ako cron vo workflowe. */
@@ -50,7 +52,13 @@ export function renderRunReport(summary: RunSummary, now: Date): string {
   const stamp = now.toISOString().replace('T', ' ').slice(0, 16);
   const failed = summary.sources.filter((source) => source.error !== null);
 
-  const lines: string[] = [`# Beh ${stamp} UTC${summary.dryRun ? ' (DRY_RUN)' : ''}`, ''];
+  // Podľa hlavičky sa dá spätne rozoznať jednorazový backfill od bežného behu.
+  const flags = [summary.backfill ? 'BACKFILL' : null, summary.dryRun ? 'DRY_RUN' : null].filter(
+    (flag): flag is string => flag !== null,
+  );
+  const suffix = flags.length > 0 ? ` (${flags.join(', ')})` : '';
+
+  const lines: string[] = [`# Beh ${stamp} UTC${suffix}`, ''];
 
   for (const source of summary.sources) {
     const status = source.error === null ? 'ok' : `ZLYHAL – ${oneLine(source.error)}`;

@@ -31,6 +31,13 @@ const SOURCES: Source[] = [
 
 const DRY_RUN = process.env['DRY_RUN'] === '1' || process.env['DRY_RUN'] === 'true';
 
+/**
+ * Jednorazové dobehnutie zameškaného. Prvý beh označil ako videné aj to, čo
+ * nikdy neodišlo do Slacku; s BACKFILL=1 sa strop FIRST_RUN_LIMIT nepoužije a
+ * odíde všetko nové bez ohľadu na počet. Plánované behy ho nenastavujú.
+ */
+const BACKFILL = process.env['BACKFILL'] === '1' || process.env['BACKFILL'] === 'true';
+
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -138,7 +145,9 @@ async function run(summary: RunSummary): Promise<void> {
   // fresh je zoradené podľa skóre, takže prvých 15 sú tie najlepšie.
   let toSend = fresh;
   let suppressed: Listing[] = [];
-  if (firstRun && fresh.length > FIRST_RUN_LIMIT) {
+  if (BACKFILL) {
+    console.log('[run] BACKFILL – posielam všetkých ' + fresh.length + ' nových, bez stropu prvého behu.');
+  } else if (firstRun && fresh.length > FIRST_RUN_LIMIT) {
     toSend = fresh.slice(0, FIRST_RUN_LIMIT);
     suppressed = fresh.slice(FIRST_RUN_LIMIT);
     summary.suppressed = suppressed.length;
@@ -210,7 +219,7 @@ async function run(summary: RunSummary): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const summary = createRunSummary(DRY_RUN);
+  const summary = createRunSummary(DRY_RUN, BACKFILL);
   let failure: unknown = null;
 
   try {

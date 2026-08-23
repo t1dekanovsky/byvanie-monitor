@@ -41,6 +41,12 @@ npm run typecheck    # tsc --noEmit
 Workflow beží podľa cronu `0 6 * * *` a `0 17 * * *` (UTC) a dá sa spustiť aj ručne
 cez **Actions → monitor → Run workflow**.
 
+Pri ručnom spustení je k dispozícii prepínač **backfill**. Zapnutý nastaví behu
+`BACKFILL=1`, čím sa vypne strop prvého behu (`FIRST_RUN_LIMIT` = 15) a do Slacku
+odíde všetko nové bez ohľadu na počet. Je to jednorazová poistka na dobehnutie
+inzerátov, ktoré prvý beh označil ako videné bez toho, aby ich poslal – plánované
+behy ju nikdy nenastavujú.
+
 ## Kritériá
 
 Všetko sa ladí v `src/config.ts` (`CRITERIA`): min. 3 izby, max. 1200 € vrátane
