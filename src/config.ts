@@ -41,7 +41,9 @@ export const CRITERIA: Criteria = {
    */
   allInKeywords: [
     'vrátane energií',
-    's energiami',
+    // „s energiami" tu zámerne nie je: rovnako často stojí vo vete o depozite
+    // („depozit vo výške mesačného nájmu s energiami") alebo o provízii, takže
+    // o základe ceny rozhodovala aj tam, kde o cene vôbec nešlo.
     'energie v cene',
     'všetko v cene',
     'vrátane všetkých poplatkov',

@@ -37,7 +37,11 @@ export function formatPrice(listing: Listing): string {
   if (listing.totalPriceEur === null || listing.priceEur === null) return 'cena neuvedená';
 
   const rent = formatEur(listing.priceEur);
-  if (listing.priceBasis === 'all_in') return rent + ' všetko v cene';
+  // „Všetko v cene" platí len dovtedy, kým sa k cene naozaj nič nepripočítava.
+  // Keď popis povie vyššiu sumu spolu, hovoríme radšej rozdiel než hlavičku.
+  if (listing.priceBasis === 'all_in' && listing.totalPriceEur === listing.priceEur) {
+    return rent + ' všetko v cene';
+  }
 
   const energies = formatEur(listing.energiesEur ?? 0);
   return rent + (listing.estimatedEnergies ? ' + odhad ' : ' + ') + energies + ' energie';

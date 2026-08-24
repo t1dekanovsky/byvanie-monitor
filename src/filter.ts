@@ -1,5 +1,5 @@
 import { CRITERIA } from './config.js';
-import { parseEnergies } from './parse.js';
+import { parseEnergies, parseStatedTotal } from './parse.js';
 import type { Criteria, Listing, PriceBasis } from './types.js';
 
 /**
@@ -159,34 +159,121 @@ function priceBasisPattern(phrase: string): RegExp {
   // Hranicu slova pýtame len pred písmenom. Plus býva prilepený na predchádzajúce
   // slovo ("1.190 eur/mes+110 eur/mes energie") a hranica by ho minula.
   const boundary = words[0] === '+' ? '' : String.raw`(?<![a-z])`;
-  return new RegExp(boundary + source, 'i');
+  // Globálny, aby sa dali prejsť všetky výskyty – prvý môže stáť v zápore
+  // a rozhodovať má až ten, ktorý v ňom nestojí.
+  return new RegExp(boundary + source, 'gi');
 }
 
 /** Skompilované vzory si držíme – regex sa inak stavia pre každý inzerát nanovo. */
 const PATTERN_CACHE = new Map<string, RegExp>();
 
+function patternFor(phrase: string): RegExp {
+  let pattern = PATTERN_CACHE.get(phrase);
+  if (pattern === undefined) {
+    pattern = priceBasisPattern(phrase);
+    PATTERN_CACHE.set(phrase, pattern);
+  }
+  pattern.lastIndex = 0;
+  return pattern;
+}
+
+/**
+ * Slová, ktorými inzerát frázu popiera: "cena nájmu nezahŕňa energie",
+ * "nájom je bez energií", "všetko okrem energií". Porovnávajú sa po koreňoch,
+ * takže "nezahŕňa" sedí aj na "nezahŕňajú"; slovo kratšie než koreň musí sedieť
+ * presne, inak by "bez" chytilo aj "bezbariérový".
+ */
+const NEGATION_CUES = ['nezahŕňa', 'neobsahuje', 'nie je', 'okrem', 'mimo', 'bez'];
+
+/** Koľko slov pred frázou sa ešte pozeráme po zápore. */
+const NEGATION_REACH = 4;
+
+/**
+ * Cez koniec vety zápor nesiaha. "Bez zvierat. Cena: 1100 €, vrátane energií"
+ * je pokojne cena vrátane energií – to "bez" patrí k celkom inej vete.
+ */
+const CLAUSE_END = /[.!?;•|\n]/;
+
+/** Sedí zápor na slová tesne pred frázou? Viacslovný ("nie je") musí sedieť v poradí. */
+function cueInWindow(window: readonly string[], cue: string): boolean {
+  const parts = normalize(cue)
+    .split(' ')
+    .map((word) => (word.length < MIN_STEM_LENGTH ? word : keywordStem(word)));
+
+  for (let start = 0; start + parts.length <= window.length; start += 1) {
+    const fits = parts.every((part, offset) => {
+      const word = window[start + offset] as string;
+      return part.length < MIN_STEM_LENGTH ? word === part : word.startsWith(part);
+    });
+    if (fits) return true;
+  }
+
+  return false;
+}
+
+/**
+ * Stojí zásah na pozícii `at` v zápore? "Cena nájmu nezahŕňa energie, v cene
+ * 190 eur/mesiac" hovorí presný opak toho, čo fráza "energie v cene" naznačuje.
+ */
+function isNegated(haystack: string, at: number): boolean {
+  const before = haystack.slice(0, at);
+  const window = wordsOf(before.slice(lastClauseStart(before))).slice(-NEGATION_REACH);
+  return NEGATION_CUES.some((cue) => cueInWindow(window, cue));
+}
+
+/** Za posledným koncom vety – tam začína veta, v ktorej fráza naozaj stojí. */
+function lastClauseStart(text: string): number {
+  for (let at = text.length - 1; at >= 0; at -= 1) {
+    if (CLAUSE_END.test(text[at] as string)) return at + 1;
+  }
+  return 0;
+}
+
+/** Sedí niektorá z fráz? Zápor sa tu nerieši, len holý zásah. */
 function matchesAny(haystack: string, phrases: readonly string[]): boolean {
   for (const phrase of phrases) {
-    let pattern = PATTERN_CACHE.get(phrase);
-    if (pattern === undefined) {
-      pattern = priceBasisPattern(phrase);
-      PATTERN_CACHE.set(phrase, pattern);
-    }
-    if (pattern.test(haystack)) return true;
+    const pattern = patternFor(phrase);
+    if (pattern.exec(haystack) !== null) return true;
   }
   return false;
+}
+
+/** Zásah bez záporu / len popretý zásah / nič. */
+type PhraseHit = 'clear' | 'negated' | 'none';
+
+/**
+ * Prejde všetky výskyty, nie len prvý – jedna popretá veta nesmie umlčať poctivú
+ * vetu o kus nižšie. Keď zostanú samé popreté zásahy, je to samo osebe odpoveď:
+ * inzerát hovorí, že energie v cene nie sú.
+ */
+function findPhrase(haystack: string, phrases: readonly string[]): PhraseHit {
+  let negated = false;
+
+  for (const phrase of phrases) {
+    const pattern = patternFor(phrase);
+
+    for (let hit = pattern.exec(haystack); hit !== null; hit = pattern.exec(haystack)) {
+      if (!isNegated(haystack, hit.index)) return 'clear';
+      negated = true;
+    }
+  }
+
+  return negated ? 'negated' : 'none';
 }
 
 /**
  * Čo už uvedená cena kryje. Keď si inzerát protirečí – a stáva sa to, býva v ňom
  * cena bez energií aj s nimi – platí `rent_only`: v hlavičke visí tá nižšia.
+ * Popretá fráza o energiách v cene hovorí presný opak, tak sa neráta vôbec.
  */
 export function detectPriceBasis(listing: Listing, criteria: Criteria = CRITERIA): PriceBasis {
   const haystack = normalize(listing.title + ' ' + listing.description);
 
   if (matchesAny(haystack, criteria.rentOnlyKeywords)) return 'rent_only';
-  if (matchesAny(haystack, criteria.allInKeywords)) return 'all_in';
-  return 'unknown';
+
+  const allIn = findPhrase(haystack, criteria.allInKeywords);
+  if (allIn === 'clear') return 'all_in';
+  return allIn === 'negated' ? 'rent_only' : 'unknown';
 }
 
 /**
@@ -203,6 +290,27 @@ export function estimateEnergies(listing: Listing, criteria: Criteria = CRITERIA
 }
 
 /**
+ * Koľkonásobok ceny z karty ešte smie byť suma z textu. Vyššie číslo už nie je
+ * mesačná cena spolu, ale cena predaja alebo nájom za celý rok.
+ */
+const MAX_STATED_TOTAL_RATIO = 3;
+
+/**
+ * Cena spolu z popisu, keď je vyššia než cena z karty a zmestí sa do násobku.
+ * Nižšia suma sa neberie: pod cenu z hlavičky sa inzerát nikdy nedostane a
+ * číslo pod ňou býva zálohy, nie cena spolu.
+ */
+function statedTotal(listing: Listing): number | null {
+  const price = listing.priceEur;
+  if (price === null || price === 0) return null;
+
+  const stated = parseStatedTotal(listing.description, listing.title);
+  if (stated === null) return null;
+
+  return stated > price && stated <= price * MAX_STATED_TOTAL_RATIO ? stated : null;
+}
+
+/**
  * Určí základ ceny, doplní energie a dopočíta totalPriceEur tak, aby vždy platilo
  * totalPriceEur = priceEur + energiesEur. `estimatedEnergies` je true len vtedy,
  * keď sa energie naozaj odhadovali.
@@ -215,6 +323,21 @@ export function withTotalPrice(listing: Listing, criteria: Criteria = CRITERIA):
   }
 
   const priceBasis = detectPriceBasis(listing, criteria);
+
+  // Popis vie povedať vyššiu cenu spolu, než akú má inzerát v hlavičke (karta
+  // 1 090 €, text „vrátane energií je 1450€"). Vtedy platí text – hlavička býva
+  // lákadlo alebo neaktualizovaná – a to aj proti all_in, ktoré by inak nechalo
+  // stáť tú nižšiu sumu.
+  const total = statedTotal(listing);
+  if (total !== null) {
+    return {
+      ...listing,
+      priceBasis,
+      energiesEur: total - listing.priceEur,
+      totalPriceEur: total,
+      estimatedEnergies: false,
+    };
+  }
 
   // Cena už kryje energie, takže sa k nej nič nepripočítava.
   if (priceBasis === 'all_in') {

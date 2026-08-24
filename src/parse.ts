@@ -60,6 +60,20 @@ export function parseArea(...texts: (string | null | undefined)[]): number | nul
   return null;
 }
 
+/**
+ * Text bez diakritiky, bez nezlomiteľných medzier a malými písmenami – inzeráty
+ * píšu "vo výške" aj "vo vyske" a hľadá sa v oboch rovnako.
+ */
+function flatten(texts: readonly (string | null | undefined)[]): string {
+  return texts
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\u00a0/g, ' ')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
 /** Suma v slovenskom zápise, aj s koncovkou ",-". */
 const AMOUNT = String.raw`(\d[\d\s.]*(?:,(?:\d+|-))?)`;
 
@@ -80,14 +94,7 @@ const MAX_ENERGIES_EUR = 600;
  * vrátane energií, hovorí `priceBasis`, nie táto funkcia.
  */
 export function parseEnergies(...texts: (string | null | undefined)[]): number | null {
-  // Bez diakritiky, lebo inzeráty píšu "vo výške" aj "vo vyske".
-  const joined = texts
-    .filter(Boolean)
-    .join(' ')
-    .replace(/\u00a0/g, ' ')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase();
+  const joined = flatten(texts);
 
   const patterns = [
     new RegExp(String.raw`\+\s*${AMOUNT}\s*(?:€|eur)\s*(?:/\s*mes\.?)?\s*(?:za\s+)?${ENERGY_LABEL}`),
@@ -104,6 +111,58 @@ export function parseEnergies(...texts: (string | null | undefined)[]): number |
   }
 
   return null;
+}
+
+/**
+ * Ako sa v texte volá suma, ktorá už kryje všetko – nájom aj energie. Bez
+ * diakritiky, lebo text sa porovnáva normalizovaný.
+ */
+const TOTAL_LABEL = String.raw`(?:spolu|celkom|celkovo|dokopy|vratane\s+(?:energi\w*|vsetkeho|vsetkych\s+poplatkov|poplatkov|sluzieb)|s\s+energiami)`;
+
+/**
+ * Medzi menovkou a sumou stojí často ešte pár slov: "spolu s energiami a dvomi
+ * garážovými státiami 1.300,-eur". Sú to slová, nie čísla, takže samotnú sumu
+ * nepohltia.
+ *
+ * Cez pár slov sa ale prepašuje aj celkom iná suma – "celkom pri podpise zmluvy:
+ * 4 500 €" je nájom aj depozit aj provízia naraz, nie mesačná cena. Tie slová
+ * medzeru zastavia.
+ */
+const NOT_MONTHLY_WORD = String.raw`(?!podpis|depozit|kauci|zabezpek|provizi|nastahovan)`;
+
+const TOTAL_FILLER = String.raw`(?:\s+${NOT_MONTHLY_WORD}[a-z]+){0,5}`;
+
+/** Spojka medzi menovkou a sumou: "vrátane energií je 1450€", "spolu: 1 300 €". */
+const TOTAL_LINK = String.raw`\s*(?:je|to|:|=|–|-|cca)?\s*`;
+
+/** Ročné vyúčtovanie ani ročný nájom nie sú mesačná suma. */
+const NOT_YEARLY = String.raw`(?!\s*(?:/\s*rok|rocne|za\s+rok))`;
+
+const STATED_TOTAL = new RegExp(
+  TOTAL_LABEL + TOTAL_FILLER + TOTAL_LINK + AMOUNT + String.raw`\s*(?:€|eur)` + NOT_YEARLY,
+  'g',
+);
+
+/**
+ * Suma, ktorú inzerát vydáva za cenu spolu: "spolu 1 300 €", "celkom 1 400 €",
+ * "vrátane energií je 1450€", "nájomné s energiami 1400 €". Vracia najvyššiu
+ * nájdenú – keď si text protirečí, platí to drahšie číslo, nie to lákavejšie.
+ *
+ * Či sa suma vôbec dá použiť, rozhoduje až filter: musí byť vyššia než cena
+ * z karty a nesmie byť jej násobkom, inak by ju prepísala cena predaja.
+ */
+export function parseStatedTotal(...texts: (string | null | undefined)[]): number | null {
+  const joined = flatten(texts);
+
+  let best: number | null = null;
+  STATED_TOTAL.lastIndex = 0;
+
+  for (let hit = STATED_TOTAL.exec(joined); hit !== null; hit = STATED_TOTAL.exec(joined)) {
+    const value = parseEuroAmount(hit[1]);
+    if (value !== null && (best === null || value > best)) best = value;
+  }
+
+  return best;
 }
 
 /** "20.08.2026" -> ISO timestamp o polnoci UTC. */
