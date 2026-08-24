@@ -178,12 +178,26 @@ function patternFor(phrase: string): RegExp {
 }
 
 /**
+ * Holé "bez" nezapiera nič: "bez výťahu", "bez zvierat", "bez provízie" stoja
+ * v inzerátoch hneď pred cenou a s energiami nemajú nič spoločné. Zapiera až
+ * vtedy, keď za ním stojí to, čo by cena mala kryť.
+ */
+const NEGATED_BY_BEZ = ['energií', 'energie', 'poplatkov', 'poplatky', 'služieb', 'služby', 'záloh', 'zálohy'];
+
+/**
  * Slová, ktorými inzerát frázu popiera: "cena nájmu nezahŕňa energie",
  * "nájom je bez energií", "všetko okrem energií". Porovnávajú sa po koreňoch,
  * takže "nezahŕňa" sedí aj na "nezahŕňajú"; slovo kratšie než koreň musí sedieť
  * presne, inak by "bez" chytilo aj "bezbariérový".
  */
-const NEGATION_CUES = ['nezahŕňa', 'neobsahuje', 'nie je', 'okrem', 'mimo', 'bez'];
+const NEGATION_CUES = [
+  'nezahŕňa',
+  'neobsahuje',
+  'nie je',
+  'okrem',
+  'mimo',
+  ...NEGATED_BY_BEZ.map((object) => 'bez ' + object),
+];
 
 /** Koľko slov pred frázou sa ešte pozeráme po zápore. */
 const NEGATION_REACH = 4;
@@ -194,15 +208,21 @@ const NEGATION_REACH = 4;
  */
 const CLAUSE_END = /[.!?;•|\n]/;
 
-/** Sedí zápor na slová tesne pred frázou? Viacslovný ("nie je") musí sedieť v poradí. */
-function cueInWindow(window: readonly string[], cue: string): boolean {
+/**
+ * Sedí zápor, ktorý sa začína v okne pred frázou? Viacslovný ("nie je", "bez
+ * energií") musí sedieť v poradí a smie prečnievať do samotnej frázy – "bez
+ * energií v cene" má popreté slovo až v nej.
+ */
+function cueBefore(words: readonly string[], cue: string, until: number): boolean {
   const parts = normalize(cue)
     .split(' ')
     .map((word) => (word.length < MIN_STEM_LENGTH ? word : keywordStem(word)));
 
-  for (let start = 0; start + parts.length <= window.length; start += 1) {
+  for (let start = Math.max(until - NEGATION_REACH, 0); start < until; start += 1) {
+    if (start + parts.length > words.length) break;
+
     const fits = parts.every((part, offset) => {
-      const word = window[start + offset] as string;
+      const word = words[start + offset] as string;
       return part.length < MIN_STEM_LENGTH ? word === part : word.startsWith(part);
     });
     if (fits) return true;
@@ -212,13 +232,17 @@ function cueInWindow(window: readonly string[], cue: string): boolean {
 }
 
 /**
- * Stojí zásah na pozícii `at` v zápore? "Cena nájmu nezahŕňa energie, v cene
- * 190 eur/mesiac" hovorí presný opak toho, čo fráza "energie v cene" naznačuje.
+ * Stojí zásah `matched` na pozícii `at` v zápore? "Cena nájmu nezahŕňa energie,
+ * v cene 190 eur/mesiac" hovorí presný opak toho, čo fráza "energie v cene"
+ * naznačuje.
  */
-function isNegated(haystack: string, at: number): boolean {
+function isNegated(haystack: string, at: number, matched: string): boolean {
   const before = haystack.slice(0, at);
-  const window = wordsOf(before.slice(lastClauseStart(before))).slice(-NEGATION_REACH);
-  return NEGATION_CUES.some((cue) => cueInWindow(window, cue));
+  const clause = wordsOf(before.slice(lastClauseStart(before)));
+
+  // Slová frázy pripájame, aby zápor mohol siahnuť aj na jej prvé slovo.
+  const words = [...clause, ...wordsOf(matched)];
+  return NEGATION_CUES.some((cue) => cueBefore(words, cue, clause.length));
 }
 
 /** Za posledným koncom vety – tam začína veta, v ktorej fráza naozaj stojí. */
@@ -253,7 +277,7 @@ function findPhrase(haystack: string, phrases: readonly string[]): PhraseHit {
     const pattern = patternFor(phrase);
 
     for (let hit = pattern.exec(haystack); hit !== null; hit = pattern.exec(haystack)) {
-      if (!isNegated(haystack, hit.index)) return 'clear';
+      if (!isNegated(haystack, hit.index, hit[0])) return 'clear';
       negated = true;
     }
   }
