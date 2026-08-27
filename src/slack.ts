@@ -1,4 +1,3 @@
-import { isCommissionFree } from './config.js';
 import type { Listing } from './types.js';
 
 /** Od tohto skóre dostane inzerát hviezdičku. */
@@ -63,7 +62,7 @@ export function formatContext(listing: Listing): string {
   if (listing.locality !== null) parts.push(listing.locality);
   if (listing.street !== null) parts.push(listing.street);
   // Inzerát od majiteľa – ušetrená provízia je to prvé, čo treba na ňom vidieť.
-  if (isCommissionFree(listing)) parts.push('bez provízie');
+  if (listing.commissionFree) parts.push('bez provízie');
   parts.push('skóre ' + listing.score + '/10');
   parts.push(listing.source);
 
@@ -89,10 +88,16 @@ export function formatListing(listing: Listing): unknown[] {
     };
   }
 
-  const blocks: unknown[] = [
-    headline,
-    { type: 'context', elements: [{ type: 'mrkdwn', text: formatContext(listing) }] },
-  ];
+  const context: unknown[] = [{ type: 'mrkdwn', text: formatContext(listing) }];
+
+  // Ten istý byt zlúčený z iného zdroja. Odkaz zostáva, nech je vidieť, kde všade
+  // visí – hlavne bazošský, cez ktorý sa občas dá dovolať priamo majiteľovi.
+  if (listing.mirrors.length > 0) {
+    const links = listing.mirrors.map((mirror) => '<' + mirror.url + '|' + mirror.source + '>');
+    context.push({ type: 'mrkdwn', text: 'aj na: ' + links.join(', ') });
+  }
+
+  const blocks: unknown[] = [headline, { type: 'context', elements: context }];
 
   const description = listing.description.trim();
   if (description !== '') {

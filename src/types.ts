@@ -32,8 +32,25 @@ export interface Listing {
   imageUrl: string | null;
   /** ISO 8601 timestamp zverejnenia, ak ho zdroj poskytuje. */
   publishedAt: string | null;
+  /**
+   * Inzerát podal majiteľ, nie realitka, takže nájomcu nečaká provízia. Dopočíta
+   * filter zo zdroja a textu inzerátu; zhodiť ho môže ešte dedup, keď sa ten istý
+   * byt nájde aj na realitnom portáli. Zdroje sem píšu `false`.
+   */
+  commissionFree: boolean;
+  /**
+   * Ten istý inzerát v iných zdrojoch, zlúčený dedupom. Zdroje sem píšu prázdne
+   * pole, plní ho až `collapseDuplicates`.
+   */
+  mirrors: Mirror[];
   /** Skóre z filtra – čím vyššie, tým lepšia zhoda s kritériami. */
   score: number;
+}
+
+/** Odkaz na ten istý inzerát v inom zdroji. */
+export interface Mirror {
+  source: string;
+  url: string;
 }
 
 /** Kritériá vyhľadávania. Konkrétne hodnoty sú v `src/config.ts`. */
@@ -51,6 +68,10 @@ export interface Criteria {
   negativeKeywords: readonly string[];
   /** Frázy, ktorými sa prezradí dopytový inzerát – realitka byt hľadá, neponúka. */
   demandKeywords: readonly string[];
+  /** Frázy, ktorými sa inzerát hlási k realitke – vtedy sa provízia platí. */
+  agencyKeywords: readonly string[];
+  /** Slová, ktorými inzerát výraz o realitke popiera („bez provízie"). */
+  agencyNegations: readonly string[];
   /** Frázy, po ktorých je uvedená cena už vrátane energií. */
   allInKeywords: readonly string[];
   /** Frázy, po ktorých sa energie platia navyše. Pri spore vyhrávajú nad allInKeywords. */

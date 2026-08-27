@@ -144,6 +144,9 @@ export function parseListingPage(html: string, target: Pick<Target, 'locality'>)
       imageUrl: absoluteUrl(item.find('img.top-seller-list__item-image').first().attr('src')),
       // Výpis dátum zverejnenia neuvádza, je len v detaile inzerátu.
       publishedAt: null,
+      // Províziu aj odkazy na to isté v iných zdrojoch dopĺňa filter a dedup.
+      commissionFree: false,
+      mirrors: [],
       score: 0,
     });
   });

@@ -1,4 +1,4 @@
-import { COMMISSION_FREE_BONUS, CRITERIA, isCommissionFree } from './config.js';
+import { COMMISSION_FREE_BONUS, CRITERIA, isCommissionFreeSource } from './config.js';
 import { parseEnergies, parseStatedTotal } from './parse.js';
 import type { Criteria, Listing, PriceBasis } from './types.js';
 
@@ -127,6 +127,69 @@ function containsPhrase(words: readonly string[], phrase: string): boolean {
 export function demandPhrase(listing: Listing, criteria: Criteria = CRITERIA): string | null {
   const words = wordsOf(listing.title + ' ' + listing.description);
   return criteria.demandKeywords.find((phrase) => containsPhrase(words, phrase)) ?? null;
+}
+
+/* ------------------------------------------------------- provízia realitky */
+
+/** Koľko slov okolo výrazu sa ešte pozeráme po popretí. */
+const AGENCY_NEGATION_REACH = 3;
+
+/**
+ * Začiatky všetkých výskytov frázy. Slová musia ísť tesne za sebou; kmeň kratší
+ * než MIN_STEM_LENGTH musí sedieť celým slovom, inak by „RK" chytilo aj „rkovy".
+ */
+function phraseHits(words: readonly string[], phrase: string): number[] {
+  const stems = phrase.split(' ').map(keywordStem);
+  const hits: number[] = [];
+
+  for (let start = 0; start + stems.length <= words.length; start += 1) {
+    const matches = stems.every((stem, offset) => {
+      const word = words[start + offset] as string;
+      return stem.length < MIN_STEM_LENGTH ? word === stem : word.startsWith(stem);
+    });
+    if (matches) hits.push(start);
+  }
+
+  return hits;
+}
+
+/** Stojí v okolí výskytu slovo, ktoré ho popiera („bez provízie", „RK nevolať")? */
+function agencyNegated(words: readonly string[], at: number, length: number, criteria: Criteria): boolean {
+  const from = Math.max(0, at - AGENCY_NEGATION_REACH);
+  const to = Math.min(words.length - 1, at + length - 1 + AGENCY_NEGATION_REACH);
+
+  for (let i = from; i <= to; i += 1) {
+    if (i >= at && i < at + length) continue;
+    const word = words[i] as string;
+    if (criteria.agencyNegations.some((cue) => word.startsWith(keywordStem(cue)))) return true;
+  }
+
+  return false;
+}
+
+/**
+ * Výraz, ktorým sa inzerát hlási k realitke, alebo null keď je to ponuka majiteľa.
+ * Popretý výskyt sa neráta – „bez provízie" znamená presný opak.
+ */
+export function agencyPhrase(listing: Listing, criteria: Criteria = CRITERIA): string | null {
+  const words = wordsOf(listing.title + ' ' + listing.description);
+
+  for (const phrase of criteria.agencyKeywords) {
+    const length = phrase.split(' ').length;
+    const hits = phraseHits(words, phrase);
+    if (hits.some((at) => !agencyNegated(words, at, length, criteria))) return phrase;
+  }
+
+  return null;
+}
+
+/**
+ * Ušetrí nájomca províziu? Musí sedieť zdroj (Bazoš) aj text – realitka svoje
+ * ponuky na Bazoš preposiela a tam provízia je. Či ten istý byt nevisí zároveň
+ * na portáli, vie až dedup naprieč zdrojmi v `src/index.ts`.
+ */
+export function commissionFree(listing: Listing, criteria: Criteria = CRITERIA): boolean {
+  return isCommissionFreeSource(listing.source) && agencyPhrase(listing, criteria) === null;
 }
 
 /* ------------------------------------------------------------- základ ceny */
@@ -404,7 +467,7 @@ export function scoreListing(listing: Listing, criteria: Criteria = CRITERIA): n
   }
 
   // Inzerát priamo od majiteľa ušetrí nájomcovi províziu vo výške mesačného nájmu.
-  if (isCommissionFree(listing)) score += COMMISSION_FREE_BONUS;
+  if (listing.commissionFree) score += COMMISSION_FREE_BONUS;
 
   return Math.min(score, MAX_SCORE);
 }
@@ -499,7 +562,8 @@ export function filterListings(listings: readonly Listing[], criteria: Criteria 
     }
 
     basis[priced.priceBasis] += 1;
-    kept.push({ ...priced, score: scoreListing(priced, criteria) });
+    const owned = { ...priced, commissionFree: commissionFree(priced, criteria) };
+    kept.push({ ...owned, score: scoreListing(owned, criteria) });
   }
 
   kept.sort((a, b) => {

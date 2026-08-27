@@ -209,6 +209,9 @@ export function parseListingPage(html: string, target: Target, criteria: Criteri
       description,
       imageUrl: card.find('img.obrazek').first().attr('src') ?? null,
       publishedAt: parseSlovakDate(clean(card.find('span.velikost10').first().text())),
+      // Províziu aj odkazy na to isté v iných zdrojoch dopĺňa filter a dedup.
+      commissionFree: false,
+      mirrors: [],
       score: 0,
     });
   });

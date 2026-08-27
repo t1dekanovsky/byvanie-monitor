@@ -1,6 +1,6 @@
 import pLimit from 'p-limit';
 
-import { CRITERIA } from './config.js';
+import { CRITERIA, isCommissionFreeSource } from './config.js';
 import { filterListings } from './filter.js';
 import { createRunSummary, writeRunReport, type RunSummary, type SourceOutcome } from './report.js';
 import { sendSourceError, sendToSlack, formatContext } from './slack.js';
@@ -13,7 +13,7 @@ import {
   DEFAULT_RETENTION_DAYS,
   type SeenMap,
 } from './state.js';
-import type { Listing, Source } from './types.js';
+import type { Listing, Mirror, Source } from './types.js';
 
 import * as zoznamrealit from './sources/zoznamrealit.js';
 import * as reality from './sources/reality.js';
@@ -89,33 +89,59 @@ async function collectFromSources(summary: RunSummary): Promise<Listing[]> {
  * podľa kľúčových slov.
  */
 function collapseDuplicates(listings: readonly Listing[]): Listing[] {
-  const byKey = new Map<string, Listing>();
-  const kept: Listing[] = [];
+  const byKey = new Map<string, Listing[]>();
+  const groups: Listing[][] = [];
 
   for (const listing of listings) {
     const keys = seenKeys(listing);
     const clash = keys.find((key) => byKey.has(key));
+    const group = clash === undefined ? [] : (byKey.get(clash) as Listing[]);
 
-    if (clash === undefined) {
-      for (const key of keys) byKey.set(key, listing);
-      kept.push(listing);
-      continue;
-    }
-
-    const previous = byKey.get(clash) as Listing;
-    if (listing.description.length <= previous.description.length) continue;
-
-    const at = kept.indexOf(previous);
-    if (at >= 0) kept[at] = listing;
-    else kept.push(listing);
-
-    for (const key of seenKeys(previous)) {
-      if (byKey.get(key) === previous) byKey.set(key, listing);
-    }
-    for (const key of keys) byKey.set(key, listing);
+    if (clash === undefined) groups.push(group);
+    group.push(listing);
+    for (const key of keys) byKey.set(key, group);
   }
 
-  return kept;
+  return groups.map(mergeGroup);
+}
+
+/**
+ * Ktorý inzerát z rovnakých zostane. Portálový vyhráva nad bazošovým: keď ten istý
+ * byt visí na oboch, je to ponuka realitky preposlaná na Bazoš, teda s províziou –
+ * a portál k nej má poriadnu hlavičku. Medzi rovnakými rozhoduje dlhší popis, v ňom
+ * sa dá lepšie hľadať podľa kľúčových slov.
+ */
+function pickPrimary(group: readonly Listing[]): Listing {
+  return [...group].sort((a, b) => {
+    const bySource = Number(isCommissionFreeSource(a.source)) - Number(isCommissionFreeSource(b.source));
+    return bySource !== 0 ? bySource : b.description.length - a.description.length;
+  })[0] as Listing;
+}
+
+/**
+ * Zlúči rovnaké inzeráty do jedného. Odkazy na ostatné zostanú ako `mirrors`, nech
+ * je v Slacku vidieť, kde všade byt visí.
+ *
+ * Bonus za chýbajúcu províziu tu odchádza sám: nesie ho `commissionFree`, ktoré má
+ * nastavené len bazošový inzerát, a ten pri zhode s portálom prehráva.
+ */
+function mergeGroup(group: readonly Listing[]): Listing {
+  const primary = pickPrimary(group);
+  const merged = group.filter((listing) => listing !== primary);
+  if (merged.length === 0) return primary;
+
+  const seenUrl = new Set([primary.url]);
+  const mirrors: Mirror[] = [];
+
+  for (const listing of merged) {
+    for (const mirror of [{ source: listing.source, url: listing.url }, ...listing.mirrors]) {
+      if (seenUrl.has(mirror.url)) continue;
+      seenUrl.add(mirror.url);
+      mirrors.push(mirror);
+    }
+  }
+
+  return { ...primary, mirrors: [...primary.mirrors, ...mirrors] };
 }
 
 /** Nové je to, čo v seen.json nie je ani pod URL, ani pod odtlačkom obsahu. */
@@ -145,6 +171,28 @@ function logSourceBreakdown(matching: readonly Listing[], merged: readonly Listi
         ' zlúčených ako duplicita',
     );
   }
+}
+
+/**
+ * Koľko inzerátov si nakoniec drží „bez provízie". Bonus je za to, že sa nájomca
+ * vyhne provízii, takže dostane len ponuka od majiteľa: nesmie visieť aj na
+ * realitnom portáli (to odfiltruje dedup) ani sa k realitke hlásiť vo vlastnom
+ * texte (to odfiltruje filter).
+ */
+function logCommissionFree(matching: readonly Listing[], merged: readonly Listing[]): void {
+  const fromOwners = matching.filter((listing) => isCommissionFreeSource(listing.source));
+  const agency = fromOwners.filter((listing) => !listing.commissionFree).length;
+  const free = merged.filter((listing) => listing.commissionFree);
+  const alsoOnPortal = free.filter((listing) => listing.mirrors.length > 0).length;
+
+  console.log(
+    '[provízia] ' + fromOwners.length + ' inzerátov od majiteľov, ' + agency +
+      ' z nich sa v texte hlási k realitke',
+  );
+  console.log(
+    '[provízia] ' + free.length + ' po dedupe drží „bez provízie", z toho ' + alsoOnPortal +
+      ' visí aj inde',
+  );
 }
 
 function printListings(listings: readonly Listing[]): void {
@@ -182,6 +230,7 @@ async function run(summary: RunSummary): Promise<void> {
 
   const merged = collapseDuplicates(matching);
   logSourceBreakdown(matching, merged);
+  logCommissionFree(matching, merged);
   console.log('[run] dedup zlúčil ' + (matching.length - merged.length) + ' duplicít, zostáva ' + merged.length);
 
   const fresh = findNew(merged, seen);

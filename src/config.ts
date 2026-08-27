@@ -1,19 +1,25 @@
-import type { Criteria, Listing } from './types.js';
+import type { Criteria } from './types.js';
 
 /**
  * Zdroje, kde inzerát podáva priamo majiteľ, nie realitka. Nájomcu tam nečaká
  * provízia vo výške mesačného nájmu, čo je pri strope 1 200 € rozdiel väčší než
  * ktorékoľvek kľúčové slovo – preto za to inzerát dostáva bonus k skóre a v Slacku
  * to vidno na prvý pohľad.
+ *
+ * Samotný zdroj ale nestačí: na Bazoš preposielajú ponuky aj realitky. Bonus preto
+ * dostane len inzerát, ktorý (a) nevisí zároveň na realitnom portáli – to rieši
+ * dedup v `src/index.ts` – a (b) sa k realitke nehlási ani vo vlastnom texte, čo
+ * rieši `AGENCY_KEYWORDS` nižšie.
  */
 const COMMISSION_FREE_SOURCES: readonly string[] = ['bazos'];
 
 /** Bonus k skóre za inzerát bez provízie. */
 export const COMMISSION_FREE_BONUS = 2;
 
-export function isCommissionFree(listing: Listing): boolean {
-  return COMMISSION_FREE_SOURCES.includes(listing.source);
+export function isCommissionFreeSource(source: string): boolean {
+  return COMMISSION_FREE_SOURCES.includes(source);
 }
+
 
 /**
  * Kritériá hľadania. Jediné miesto, kde sa ladí, čo sa považuje za zhodu –
@@ -86,6 +92,48 @@ export const CRITERIA: Criteria = {
     'k tomu energie',
     'energie podľa spotreby',
     'energie sa platia zvlášť',
+  ],
+
+  /**
+   * Podľa čoho spoznať realitku v texte inzerátu. Porovnáva sa po slovách a po
+   * koreňoch, takže „realitná kancelária" sedí aj na „realitnej kancelárie";
+   * dvojpísmenkové „RK" musí sedieť celým slovom.
+   *
+   * Sú to zámerne kmene, nie celé súslovia: „sprostredkovateľ" pokryje aj
+   * „sprostredkovateľský poplatok" a skloňovanie, ktoré by dvojslovnú frázu minulo.
+   */
+  agencyKeywords: [
+    'realitná kancelária',
+    'realitka',
+    'RK',
+    'provízia',
+    'sprostredkovateľ',
+    'maklér',
+    'v zastúpení',
+  ],
+
+  /**
+   * Slová, ktorými inzerát výraz o realitke popiera. Majiteľ píše „bez provízie",
+   * „RK prosím nevolať" či „realitné kancelárie nekontaktovať" – to je opak realitky
+   * a práve taký inzerát chceme mať navrchu. Hľadajú sa v okolí nájdeného výrazu.
+   */
+  agencyNegations: [
+    'bez',
+    'žiadna',
+    'nie',
+    // Zámerne v najkratšom tvare, aby koreň pokryl celé sloveso: „neplatí",
+    // „neplatíte" aj „neplatia". Dlhší tvar by sedel len na jednu osobu.
+    'neplatí',
+    'neúčtuje',
+    'nevolá',
+    'nekontakt',
+    'neposiela',
+    'nežiada',
+    'nemám',
+    'neponúka',
+    'nulová',
+    'vylúčené',
+    'odmieta',
   ],
 
   /** Zvyšujú skóre inzerátu. */

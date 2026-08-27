@@ -159,6 +159,9 @@ export function parseListingPage(html: string, target: Pick<Target, 'locality'>)
       description,
       imageUrl: card.find('img[data-lazy-src]').first().attr('data-lazy-src') ?? null,
       publishedAt: parseSlovakDate(published) ?? parseSlovakDate(updated),
+      // Províziu aj odkazy na to isté v iných zdrojoch dopĺňa filter a dedup.
+      commissionFree: false,
+      mirrors: [],
       score: 0,
     });
   });

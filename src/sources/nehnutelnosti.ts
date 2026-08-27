@@ -406,6 +406,9 @@ function toListing(card: RawCard, target: Target, descriptions: Map<string, stri
     description,
     imageUrl: text(card.photos?.[0]?.url),
     publishedAt: toIsoDate(card.createdAt),
+    // Províziu aj odkazy na to isté v iných zdrojoch dopĺňa filter a dedup.
+    commissionFree: false,
+    mirrors: [],
     score: 0,
   };
 }
