@@ -10,6 +10,11 @@ export interface FetchOptions {
   timeoutMs?: number;
   /** Koľkokrát to po zlyhaní skúsiť znova (0 = žiadny opakovaný pokus). */
   retries?: number;
+  /**
+   * Pauza pred ďalším pokusom. Portály, ktoré vracajú HTTP 429, okamžité
+   * zopakovanie odmietnu rovnako – tým sa im dá čas vydýchnuť si.
+   */
+  retryDelayMs?: number;
   /** Predpona do logu, zvyčajne názov zdroja. */
   label?: string;
 }
@@ -38,7 +43,7 @@ export async function fetchHtml(url: string, timeoutMs: number = DEFAULT_TIMEOUT
 
 /** Stiahne stránku, po zlyhaní to skúsi znova. Poslednú chybu púšťa ďalej. */
 export async function fetchHtmlWithRetry(url: string, options: FetchOptions = {}): Promise<string> {
-  const { timeoutMs = DEFAULT_TIMEOUT_MS, retries = 1, label = 'http' } = options;
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, retries = 1, retryDelayMs = 0, label = 'http' } = options;
   let lastError: unknown;
 
   for (let attempt = 0; attempt <= retries; attempt += 1) {
@@ -49,9 +54,15 @@ export async function fetchHtmlWithRetry(url: string, options: FetchOptions = {}
       if (attempt < retries) {
         const reason = error instanceof Error ? error.message : String(error);
         console.warn('[' + label + '] ' + url + ' zlyhalo (' + reason + '), skúšam znova');
+        // Pauza rastie s pokusom – druhé odmietnutie znamená, že portál chce viac pokoja.
+        if (retryDelayMs > 0) await sleep(retryDelayMs * (attempt + 1));
       }
     }
   }
 
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

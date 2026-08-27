@@ -1,7 +1,15 @@
 /**
- * Parsovanie textov, ktoré vyzerajú rovnako na oboch portáloch (izby, plocha,
+ * Parsovanie textov, ktoré vyzerajú rovnako na všetkých zdrojoch (izby, plocha,
  * energie v popise). Formát ceny sa medzi portálmi líši, ten si rieši každý zdroj sám.
  */
+
+/**
+ * Text bez diakritiky a malými písmenami. Inzeráty sa píšu všelijako – „päťizbový"
+ * aj „patizbovy" – a porovnávať sa musia rovnako.
+ */
+export function deaccent(text: string): string {
+  return text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+}
 
 /** Zjednotí biele znaky vrátane nezlomiteľnej medzery. */
 export function clean(text: string | undefined | null): string {
@@ -29,12 +37,41 @@ export function parseEuroAmount(raw: string | null | undefined): number | null {
   return Number.isFinite(value) ? value : null;
 }
 
-/** "3-izbový byt", "5 a viac izbový byt", "4 izbový rodinný dom", "3i byt". */
+/**
+ * Dispozícia slovom. Portály ju píšu číslom, na Bazoši ju súkromník napíše aj
+ * takto – "trojizbový byt". Kľúče sú bez diakritiky, text sa porovnáva cez `deaccent`.
+ */
+const ROOM_WORDS: Readonly<Record<string, number>> = {
+  jedno: 1,
+  dvoj: 2,
+  troj: 3,
+  stvor: 4,
+  pat: 5,
+  sest: 6,
+};
+
+const ROOM_WORD_PATTERN = new RegExp('(' + Object.keys(ROOM_WORDS).join('|') + ')\\s*-?\\s*izb');
+
+/**
+ * "3-izbový byt", "5 a viac izbový byt", "4 izbový rodinný dom", "trojizbový byt",
+ * "1,5-izbový byt", "3i byt".
+ */
 export function parseRooms(...texts: (string | null | undefined)[]): number | null {
   for (const text of texts) {
     if (!text) continue;
-    const rooms = text.match(/(\d+)\s*(?:a\s*viac\s*)?[-–—]?\s*izb/i);
-    if (rooms?.[1]) return Number(rooms[1]);
+    // Zlomok musí byť v zázname, inak by sa z „1,5-izbový" prečítala päťka. Pol
+    // izby navyše dispozíciu nemení, tak sa zaokrúhľuje nadol: 3,5 izby je trojizbák.
+    const rooms = text.match(/(\d+(?:[.,]\d+)?)\s*(?:a\s*viac\s*)?[-–—]?\s*izb/i);
+    if (rooms?.[1]) {
+      const value = Math.floor(Number(rooms[1].replace(',', '.')));
+      if (Number.isFinite(value) && value > 0) return value;
+    }
+  }
+
+  for (const text of texts) {
+    if (!text) continue;
+    const word = deaccent(text).match(ROOM_WORD_PATTERN)?.[1];
+    if (word !== undefined) return ROOM_WORDS[word] as number;
   }
 
   // Až ako záloha – inak by "3i" kdekoľvek v názve prebilo poctivý údaj o dispozícii.
@@ -65,13 +102,7 @@ export function parseArea(...texts: (string | null | undefined)[]): number | nul
  * píšu "vo výške" aj "vo vyske" a hľadá sa v oboch rovnako.
  */
 function flatten(texts: readonly (string | null | undefined)[]): string {
-  return texts
-    .filter(Boolean)
-    .join(' ')
-    .replace(/\u00a0/g, ' ')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase();
+  return deaccent(texts.filter(Boolean).join(' ').replace(/\u00a0/g, ' '));
 }
 
 /** Suma v slovenskom zápise, aj s koncovkou ",-". */

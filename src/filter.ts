@@ -1,4 +1,4 @@
-import { CRITERIA } from './config.js';
+import { COMMISSION_FREE_BONUS, CRITERIA, isCommissionFree } from './config.js';
 import { parseEnergies, parseStatedTotal } from './parse.js';
 import type { Criteria, Listing, PriceBasis } from './types.js';
 
@@ -402,6 +402,9 @@ export function scoreListing(listing: Listing, criteria: Criteria = CRITERIA): n
     if (!containsKeyword(haystack, keyword)) continue;
     score += DOUBLE_WEIGHT_KEYWORDS.includes(keyword) ? 2 : 1;
   }
+
+  // Inzerát priamo od majiteľa ušetrí nájomcovi províziu vo výške mesačného nájmu.
+  if (isCommissionFree(listing)) score += COMMISSION_FREE_BONUS;
 
   return Math.min(score, MAX_SCORE);
 }

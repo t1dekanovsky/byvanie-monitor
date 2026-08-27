@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit",
     "test:zoznamrealit": "tsx scripts/test-zoznamrealit.ts",
     "test:reality": "tsx scripts/test-reality.ts",
-    "test:nehnutelnosti": "tsx scripts/test-nehnutelnosti.ts"
+    "test:nehnutelnosti": "tsx scripts/test-nehnutelnosti.ts",
+    "test:bazos": "tsx scripts/test-bazos.ts"
   },
   "dependencies": {
     "cheerio": "^1.0.0",

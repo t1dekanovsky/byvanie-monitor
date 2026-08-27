@@ -18,6 +18,7 @@ import type { Listing, Source } from './types.js';
 import * as zoznamrealit from './sources/zoznamrealit.js';
 import * as reality from './sources/reality.js';
 import * as nehnutelnosti from './sources/nehnutelnosti.js';
+import * as bazos from './sources/bazos.js';
 
 /** Koľko zdrojov sa sťahuje naraz – portály sú malé, netreba ich zahltiť. */
 const SOURCE_CONCURRENCY = 2;
@@ -35,6 +36,7 @@ const SOURCES: Source[] = [
   { name: zoznamrealit.SOURCE_NAME, fetchListings: zoznamrealit.fetchListings },
   { name: reality.SOURCE_NAME, fetchListings: reality.fetchListings },
   { name: nehnutelnosti.SOURCE_NAME, fetchListings: nehnutelnosti.fetchListings },
+  { name: bazos.SOURCE_NAME, fetchListings: bazos.fetchListings },
 ];
 
 const DRY_RUN = process.env['DRY_RUN'] === '1' || process.env['DRY_RUN'] === 'true';

@@ -1,4 +1,19 @@
-import type { Criteria } from './types.js';
+import type { Criteria, Listing } from './types.js';
+
+/**
+ * Zdroje, kde inzerát podáva priamo majiteľ, nie realitka. Nájomcu tam nečaká
+ * provízia vo výške mesačného nájmu, čo je pri strope 1 200 € rozdiel väčší než
+ * ktorékoľvek kľúčové slovo – preto za to inzerát dostáva bonus k skóre a v Slacku
+ * to vidno na prvý pohľad.
+ */
+const COMMISSION_FREE_SOURCES: readonly string[] = ['bazos'];
+
+/** Bonus k skóre za inzerát bez provízie. */
+export const COMMISSION_FREE_BONUS = 2;
+
+export function isCommissionFree(listing: Listing): boolean {
+  return COMMISSION_FREE_SOURCES.includes(listing.source);
+}
 
 /**
  * Kritériá hľadania. Jediné miesto, kde sa ladí, čo sa považuje za zhodu –
@@ -132,5 +147,23 @@ export const CRITERIA: Criteria = {
     'zalohovane',
     'obsadené',
     'obsadene',
+
+    /**
+     * Bazoš. Súkromník tam v tej istej kategórii ponúka aj izbu v byte alebo
+     * lôžko pre partiu robotníkov – čísla sedia (izby a plocha sú za celý byt),
+     * ale prenajíma sa kus. Frázy sú zámerne dlhé: samotné „izbu" stojí v popise
+     * poctivých ponúk („dve samostatné izby") a vyradilo by ich tiež.
+     */
+    'prenajmem izbu',
+    'prenájom izby',
+    'izba na prenájom',
+    'spolubývajúci',
+    'cena za osobu',
+    'za lôžko',
+    'pre robotníkov',
+    'pre pracujúcich',
+    'pre partiu',
+    'ubytovňa',
+    'ubytovanie pre',
   ],
 };

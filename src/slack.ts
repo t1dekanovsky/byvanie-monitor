@@ -1,3 +1,4 @@
+import { isCommissionFree } from './config.js';
 import type { Listing } from './types.js';
 
 /** Od tohto skóre dostane inzerát hviezdičku. */
@@ -53,7 +54,7 @@ function roomsWord(rooms: number): string {
   return rooms >= 2 && rooms <= 4 ? 'izby' : 'izieb';
 }
 
-/** "1 050 € · 78 m² · 3 izby · Bratislava II · skóre 8/10" */
+/** "1 050 € · 78 m² · 3 izby · Bratislava II · bez provízie · skóre 8/10" */
 export function formatContext(listing: Listing): string {
   const parts = [formatPrice(listing)];
 
@@ -61,6 +62,8 @@ export function formatContext(listing: Listing): string {
   if (listing.rooms !== null) parts.push(listing.rooms + ' ' + roomsWord(listing.rooms));
   if (listing.locality !== null) parts.push(listing.locality);
   if (listing.street !== null) parts.push(listing.street);
+  // Inzerát od majiteľa – ušetrená provízia je to prvé, čo treba na ňom vidieť.
+  if (isCommissionFree(listing)) parts.push('bez provízie');
   parts.push('skóre ' + listing.score + '/10');
   parts.push(listing.source);
 
