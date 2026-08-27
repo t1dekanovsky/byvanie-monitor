@@ -6,8 +6,21 @@ export const USER_AGENT =
 
 export const DEFAULT_TIMEOUT_MS = 15_000;
 
+/**
+ * Chyba s HTTP kódom. Bez nej sa „odmietol nás, spomaľ" (429/503) nedá odlíšiť od
+ * „stránka je preč" (404) inak než čítaním textu chybovej hlášky.
+ */
+export class HttpError extends Error {
+  constructor(readonly status: number, statusText: string) {
+    super('HTTP ' + status + ' ' + statusText);
+    this.name = 'HttpError';
+  }
+}
+
 export interface FetchOptions {
   timeoutMs?: number;
+  /** Vlastná hlavička User-Agent namiesto `USER_AGENT`. */
+  userAgent?: string;
   /** Koľkokrát to po zlyhaní skúsiť znova (0 = žiadny opakovaný pokus). */
   retries?: number;
   /**
@@ -20,7 +33,11 @@ export interface FetchOptions {
 }
 
 /** Jedno stiahnutie s tvrdým timeoutom cez AbortController. */
-export async function fetchHtml(url: string, timeoutMs: number = DEFAULT_TIMEOUT_MS): Promise<string> {
+export async function fetchHtml(
+  url: string,
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  userAgent: string = USER_AGENT,
+): Promise<string> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -28,13 +45,13 @@ export async function fetchHtml(url: string, timeoutMs: number = DEFAULT_TIMEOUT
     const response = await fetch(url, {
       signal: controller.signal,
       headers: {
-        'User-Agent': USER_AGENT,
+        'User-Agent': userAgent,
         Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'sk-SK,sk;q=0.9,cs;q=0.8,en;q=0.7',
       },
     });
 
-    if (!response.ok) throw new Error('HTTP ' + response.status + ' ' + response.statusText);
+    if (!response.ok) throw new HttpError(response.status, response.statusText);
     return await response.text();
   } finally {
     clearTimeout(timer);
@@ -43,12 +60,18 @@ export async function fetchHtml(url: string, timeoutMs: number = DEFAULT_TIMEOUT
 
 /** Stiahne stránku, po zlyhaní to skúsi znova. Poslednú chybu púšťa ďalej. */
 export async function fetchHtmlWithRetry(url: string, options: FetchOptions = {}): Promise<string> {
-  const { timeoutMs = DEFAULT_TIMEOUT_MS, retries = 1, retryDelayMs = 0, label = 'http' } = options;
+  const {
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+    retries = 1,
+    retryDelayMs = 0,
+    userAgent = USER_AGENT,
+    label = 'http',
+  } = options;
   let lastError: unknown;
 
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     try {
-      return await fetchHtml(url, timeoutMs);
+      return await fetchHtml(url, timeoutMs, userAgent);
     } catch (error) {
       lastError = error;
       if (attempt < retries) {

@@ -19,11 +19,29 @@ lokalita a odkaz, takže sa nič nemusí dohľadávať v histórii Slacku. Repor
 119 riadkov; keď sa zoznamy nezmestia, nechá tie s najvyšším skóre a dopíše, koľko
 vynechal. Workflow ho commitne spolu so seen.json.
 
-## Stav
+## Zdroje
 
-Kostra projektu. `src/config.ts`, `src/types.ts`, `src/state.ts` a `src/index.ts` sú
-hotové; `src/filter.ts`, `src/slack.ts` a moduly v `src/sources/` sú zatiaľ stuby,
-ktoré hádžu `not implemented`.
+`zoznamrealit.sk`, `reality.sk`, `nehnutelnosti.sk` a `reality.bazos.sk`. Prvé tri sú
+realitné portály, Bazoš je bazár s inzerátmi priamo od majiteľov – práve preto tam býva
+ponuka bez provízie.
+
+### Bazoš a robots.txt
+
+Na Bazoši sťahujeme výpisy `reality.bazos.sk/prenajmu/{byt,dom}/` s parametrami
+`hlokalita` (PSČ), `humkreis` (okolie v km) a `cenado` (strop ceny), teda cesty, ktoré
+má portál v `robots.txt` zakázané. Je to vedomé rozhodnutie a dôvod je paradoxný:
+povolené sú len kategórie bez filtra, tie však majú vyše 6 000 prenájmov za celé
+Slovensko v poradí, ktoré nie je podľa dátumu, takže pokryť Bratislavský kraj by
+znamenalo stiahnuť zhruba 320 strán namiesto 57. Filtrovaný dopyt je pre ich server
+rádovo menšia záťaž než jediná legálna alternatíva. Aby to tak aj zostalo, Bazoš má
+vlastný režim: predstavuje sa hlavičkou `User-Agent`, v ktorej je názov nástroja, účel
+(osobné hľadanie bytu), frekvencia a kontaktný e-mail; všetky jeho požiadavky idú cez
+jednu frontu s rozostupom 700 ms (necelé dve za sekundu); na `HTTP 429` a `503` čaká
+30 s, potom 60 s a po treťom odmietnutí zdroj pre daný beh zavrie; a beží najviac
+**dvakrát za kalendárny deň (UTC)** bez ohľadu na to, čo ho spustí – plán, ručné
+spustenie aj backfill. Počítadlo je v `data/run-quota.json`. Keď je strop vyčerpaný,
+Bazoš sa preskočí, ostatné tri zdroje bežia ďalej a v reporte behu je pri ňom
+`PRESKOČENÝ`. Ide o osobné použitie pre jednu domácnosť, nie o komerčný zber dát.
 
 ## Nastavenie
 

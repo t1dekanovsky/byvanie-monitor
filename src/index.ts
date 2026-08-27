@@ -2,6 +2,7 @@ import pLimit from 'p-limit';
 
 import { CRITERIA, isCommissionFreeSource } from './config.js';
 import { filterListings } from './filter.js';
+import { SourceSkipped } from './quota.js';
 import { createRunSummary, writeRunReport, type RunSummary, type SourceOutcome } from './report.js';
 import { sendSourceError, sendToSlack, formatContext } from './slack.js';
 import {
@@ -62,7 +63,7 @@ async function collectFromSources(summary: RunSummary): Promise<Listing[]> {
   const batches = await Promise.all(
     SOURCES.map((source) =>
       limit(async (): Promise<Listing[]> => {
-        const outcome: SourceOutcome = { name: source.name, found: 0, error: null };
+        const outcome: SourceOutcome = { name: source.name, found: 0, error: null, skipped: null };
         summary.sources.push(outcome);
 
         try {
@@ -71,6 +72,14 @@ async function collectFromSources(summary: RunSummary): Promise<Listing[]> {
           console.log('[' + source.name + '] načítaných ' + listings.length + ' inzerátov');
           return listings;
         } catch (error) {
+          // Vyčerpaný denný strop nie je porucha – zdroj sa proste dnes nesťahuje
+          // a ostatné bežia ďalej, takže sa o ňom do Slacku nič nehlási.
+          if (error instanceof SourceSkipped) {
+            outcome.skipped = error.message;
+            console.log('[' + source.name + '] preskočený: ' + error.message);
+            return [];
+          }
+
           outcome.error = describeError(error);
           console.error('[' + source.name + '] zlyhal: ' + outcome.error);
           return [];

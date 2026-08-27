@@ -20,6 +20,8 @@ export interface SourceOutcome {
   found: number;
   /** Text chyby, ak zdroj spadol. */
   error: string | null;
+  /** Dôvod, prečo sa zdroj vôbec nesťahoval (napr. vyčerpaný denný strop). */
+  skipped: string | null;
 }
 
 export interface RunSummary {
@@ -142,7 +144,12 @@ export function renderRunReport(summary: RunSummary, now: Date): string {
   const lines: string[] = [`# Beh ${stamp} UTC${suffix}`, ''];
 
   for (const source of summary.sources) {
-    const status = source.error === null ? 'ok' : `ZLYHAL – ${oneLine(source.error)}`;
+    const status =
+      source.skipped !== null
+        ? `PRESKOČENÝ – ${oneLine(source.skipped)}`
+        : source.error === null
+          ? 'ok'
+          : `ZLYHAL – ${oneLine(source.error)}`;
     lines.push(`- ${source.name}: ${source.found} inzerátov, ${status}`);
   }
 

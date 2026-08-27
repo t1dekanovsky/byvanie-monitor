@@ -6,8 +6,9 @@ import * as cheerio from 'cheerio';
 import pLimit from 'p-limit';
 
 import { CRITERIA } from '../config.js';
-import { fetchHtmlWithRetry } from '../http.js';
+import { fetchHtml, HttpError } from '../http.js';
 import { clean, parseArea, parseEnergies, parseEuroAmount, parseRooms, parseSlovakDate } from '../parse.js';
+import { claimRun, SourceSkipped } from '../quota.js';
 import { loadSeen } from '../state.js';
 import type { Criteria, FetchListings, Listing } from '../types.js';
 
@@ -52,6 +53,26 @@ const CENTRES = [
   { psc: '81101', km: 35, label: 'Bratislava + Senec + Pezinok' },
   { psc: '90101', km: 25, label: 'okres Malacky' },
 ] as const;
+
+/**
+ * Bazoš je jediný zdroj, kde sťahujeme cesty zakázané v robots.txt, tak sa aspoň
+ * predstavíme vlastným menom: čo to je, ako často to beží a kam napísať, keby to
+ * niekomu prekážalo. Ostatné tri zdroje ostávajú na bežnej prehliadačovej hlavičke.
+ */
+const BAZOS_USER_AGENT =
+  'byvanie-monitor/1.0 (osobne hladanie bytu / personal flat search; 2 runs per day; ' +
+  '+https://github.com/t1dekanovsky/byvanie-monitor; t1dekanovsky@gmail.com)';
+
+/** Koľkokrát smie Bazoš bežať za kalendárny deň (UTC), nech ho spustí čokoľvek. */
+const MAX_RUNS_PER_DAY = 2;
+
+/**
+ * Čakanie po HTTP 429/503, exponenciálne. Tri pokusy spolu: prvý hneď, po ňom
+ * pauza 30 s, potom 60 s. Keď ani tretí neprejde, zdroj sa pre tento beh zatvára –
+ * ďalšie dopyty už neodídu, lebo búchať na zavreté dvere je presne to, čo Bazoš
+ * týmto kódom zakazuje.
+ */
+const THROTTLE_BACKOFF_MS = [30_000, 60_000];
 
 const LIST_CONCURRENCY = 2;
 const PAGE_SIZE = 20;
@@ -103,19 +124,68 @@ function sleep(ms: number): Promise<void> {
 /** Kedy najskôr smie odísť ďalšia požiadavka. Spoločné pre výpisy aj detaily. */
 let nextRequestAt = 0;
 
-/** Stiahnutie s pevným rozostupom od predchádzajúceho – viď REQUEST_INTERVAL_MS. */
-async function politeFetch(url: string): Promise<string> {
+/** Bazoš nás v tomto behu odmietol aj po všetkých pauzách – už mu nevoláme. */
+let throttledOut = false;
+
+const THROTTLED_OUT = 'Bazoš odmietol aj po opakovaných pauzách, zvyšok behu ho vynechávam';
+
+/** Počká, kým príde rad podľa REQUEST_INTERVAL_MS. */
+async function waitForSlot(): Promise<void> {
   const now = Date.now();
   const start = Math.max(now, nextRequestAt);
   nextRequestAt = start + REQUEST_INTERVAL_MS;
   if (start > now) await sleep(start - now);
+}
 
-  return fetchHtmlWithRetry(url, {
-    timeoutMs: TIMEOUT_MS,
-    retries: RETRIES,
-    retryDelayMs: RETRY_DELAY_MS,
-    label: SOURCE_NAME,
-  });
+/** Odmietol nás portál preto, že ideme príliš zhurta? */
+function isThrottled(error: unknown): boolean {
+  return error instanceof HttpError && (error.status === 429 || error.status === 503);
+}
+
+/**
+ * Stiahnutie s pevným rozostupom od predchádzajúceho. Na 429/503 čaká podľa
+ * THROTTLE_BACKOFF_MS a po vyčerpaní pokusov zatvorí zdroj pre celý beh; iné
+ * chyby (timeout, výpadok siete) skúsi ešte raz s krátkou pauzou.
+ *
+ * Exportované kvôli scripts/test-bazos-backoff.ts – čakačky sa inak nedajú overiť.
+ */
+export async function politeFetch(url: string): Promise<string> {
+  if (throttledOut) throw new Error(THROTTLED_OUT);
+
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt <= THROTTLE_BACKOFF_MS.length; attempt += 1) {
+    await waitForSlot();
+
+    try {
+      return await fetchHtml(url, TIMEOUT_MS, BAZOS_USER_AGENT);
+    } catch (error) {
+      lastError = error;
+
+      if (!isThrottled(error)) {
+        // Bežné zlyhanie: jedno rýchle zopakovanie a dosť, o zvyšok sa stará volajúci.
+        if (attempt >= RETRIES) break;
+        await sleep(RETRY_DELAY_MS);
+        continue;
+      }
+
+      const wait = THROTTLE_BACKOFF_MS[attempt];
+      if (wait === undefined) break;
+
+      console.warn(
+        '[' + SOURCE_NAME + '] ' + (error as HttpError).message + ', čakám ' +
+          Math.round(wait / 1000) + ' s a skúšam znova',
+      );
+      await sleep(wait);
+    }
+  }
+
+  if (isThrottled(lastError)) {
+    throttledOut = true;
+    console.warn('[' + SOURCE_NAME + '] ' + THROTTLED_OUT);
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 /* ------------------------------------------------------------------ lokalita */
@@ -404,6 +474,16 @@ async function attachDescriptions(candidates: readonly Listing[]): Promise<numbe
 
 /** Načíta prenájmy z reality.bazos.sk a normalizuje ich do `Listing`. */
 export async function fetchBazos(criteria: Criteria = CRITERIA): Promise<Listing[]> {
+  if (!(await claimRun(SOURCE_NAME, MAX_RUNS_PER_DAY))) {
+    throw new SourceSkipped(
+      'denný strop ' + MAX_RUNS_PER_DAY + ' behov je vyčerpaný, dnes už Bazoš nesťahujem',
+    );
+  }
+
+  // Proces zvyčajne beží raz, ale v testoch sa `fetchBazos` volá viackrát za sebou –
+  // predchádzajúce odmietnutie nesmie zavrieť aj ten ďalší beh.
+  throttledOut = false;
+
   const limit = pLimit(LIST_CONCURRENCY);
   const firstPages = buildTargets(criteria);
   console.log(
