@@ -17,6 +17,7 @@ import type { Listing, Source } from './types.js';
 
 import * as zoznamrealit from './sources/zoznamrealit.js';
 import * as reality from './sources/reality.js';
+import * as nehnutelnosti from './sources/nehnutelnosti.js';
 
 /** Koľko zdrojov sa sťahuje naraz – portály sú malé, netreba ich zahltiť. */
 const SOURCE_CONCURRENCY = 2;
@@ -24,9 +25,16 @@ const SOURCE_CONCURRENCY = 2;
 /** Prvý beh pošle len toľko najlepších, zvyšok sa ticho označí ako videný. */
 const FIRST_RUN_LIMIT = 15;
 
+/**
+ * Reality.sk a nehnutelnosti.sk majú spoločného majiteľa, ale nie spoločnú
+ * inzerciu – platené inzeráty sa medzi nimi neprelievajú, takže sú to dva
+ * samostatné zdroje. To, čo naozaj visí na oboch, zlúči až `collapseDuplicates`
+ * podľa odtlačku obsahu.
+ */
 const SOURCES: Source[] = [
   { name: zoznamrealit.SOURCE_NAME, fetchListings: zoznamrealit.fetchListings },
   { name: reality.SOURCE_NAME, fetchListings: reality.fetchListings },
+  { name: nehnutelnosti.SOURCE_NAME, fetchListings: nehnutelnosti.fetchListings },
 ];
 
 const DRY_RUN = process.env['DRY_RUN'] === '1' || process.env['DRY_RUN'] === 'true';
@@ -110,7 +118,31 @@ function collapseDuplicates(listings: readonly Listing[]): Listing[] {
 
 /** Nové je to, čo v seen.json nie je ani pod URL, ani pod odtlačkom obsahu. */
 function findNew(listings: readonly Listing[], seen: SeenMap): Listing[] {
-  return collapseDuplicates(listings).filter((listing) => !isSeen(listing, seen));
+  return listings.filter((listing) => !isSeen(listing, seen));
+}
+
+/**
+ * Rozpis podľa zdroja: koľko inzerátov prešlo filtrom a koľko z nich zlúčil
+ * dedup s iným záznamom. Bez tohto riadku sa nedá povedať, či nový portál
+ * naozaj prináša ponuky navyše, alebo len prepisuje tie, čo už máme inde.
+ */
+function logSourceBreakdown(matching: readonly Listing[], merged: readonly Listing[]): void {
+  const survived = new Set(merged.map((listing) => listing.id));
+  const counts = new Map<string, { matched: number; duplicate: number }>();
+
+  for (const listing of matching) {
+    const entry = counts.get(listing.source) ?? { matched: 0, duplicate: 0 };
+    entry.matched += 1;
+    if (!survived.has(listing.id)) entry.duplicate += 1;
+    counts.set(listing.source, entry);
+  }
+
+  for (const [source, entry] of counts) {
+    console.log(
+      '[filter] ' + source + ': ' + entry.matched + ' vyhovujúcich, ' + entry.duplicate +
+        ' zlúčených ako duplicita',
+    );
+  }
 }
 
 function printListings(listings: readonly Listing[]): void {
@@ -146,9 +178,13 @@ async function run(summary: RunSummary): Promise<void> {
       ' nájom bez energií, ' + basis.unknown + ' neuvedené',
   );
 
-  const fresh = findNew(matching, seen);
+  const merged = collapseDuplicates(matching);
+  logSourceBreakdown(matching, merged);
+  console.log('[run] dedup zlúčil ' + (matching.length - merged.length) + ' duplicít, zostáva ' + merged.length);
+
+  const fresh = findNew(merged, seen);
   summary.fresh = fresh.length;
-  console.log('[run] ' + matching.length + ' vyhovujúcich, z toho ' + fresh.length + ' nových');
+  console.log('[run] ' + merged.length + ' vyhovujúcich, z toho ' + fresh.length + ' nových');
 
   // fresh je zoradené podľa skóre, takže prvých 15 sú tie najlepšie.
   let toSend = fresh;
